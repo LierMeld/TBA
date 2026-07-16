@@ -34,7 +34,8 @@ Private Const FLD_OTHER_MM As Double = 5
 ' основная надпись: форма 5 по ГОСТ 21.101, мм
 Private Const STAMP_W As Double = 185
 Private Const STAMP_H As Double = 40
-Private Const STAMP_GAP As Double = 3           ' зазор таблица-штамп, мм
+' зазор между таблицей и штампом, мм
+Private Const STAMP_GAP As Double = 3
 
 ' толщина линий, пт (основная / тонкая)
 Private Const W_MAIN As Double = 2#
@@ -56,13 +57,15 @@ End Function
 '---------------------------------------------------------------------
 Public Sub PrintWithFrame()
     If TypeName(ActiveSheet) <> "Worksheet" Then
-        MsgBox "Активный лист не является рабочим листом.", vbExclamation
+        MsgBox "Активный лист не является рабочим листом.", _
+            vbExclamation
         Exit Sub
     End If
     Dim src As Worksheet
     Set src = ActiveSheet
     If src.Name = TMP_SHEET Then
-        MsgBox "Активен временный лист печати. Откройте лист с таблицей.", vbExclamation
+        MsgBox "Активен временный лист печати." & vbCrLf & _
+            "Откройте лист с таблицей.", vbExclamation
         Exit Sub
     End If
 
@@ -114,7 +117,7 @@ Public Sub PrintWithFrame()
     Dim ws As Worksheet
     Set ws = ActiveSheet
     ws.Name = TMP_SHEET
-    DeleteFrameShapes ws                        ' старые рамки, если были
+    DeleteFrameShapes ws        ' старые рамки, если были
     ws.ResetAllPageBreaks
 
     ' --- границы содержимого ----------------------------------------
@@ -140,7 +143,8 @@ Public Sub PrintWithFrame()
     If withStamp Then stampReserve = MM(STAMP_H + STAMP_GAP)
 
     Dim fills As Collection
-    Set fills = New Collection                  ' Array(строка, высота вставки)
+    ' элементы: Array(строка, высота вставки)
+    Set fills = New Collection
     Dim r As Long, acc As Double, limit As Double, rowH As Double
     limit = cH - stampReserve                   ' лимит первой страницы
     acc = 0: r = 1
@@ -148,7 +152,8 @@ Public Sub PrintWithFrame()
         rowH = ws.Rows(r).Height
         If acc + rowH > limit + 0.3 And acc > 0 Then
             fills.Add Array(r - 1, cH - acc)    ' добить страницу до cH
-            limit = cH                          ' следующие страницы - без штампа
+            ' следующие страницы - без штампа
+            limit = cH
             acc = 0
         Else
             acc = acc + rowH
@@ -160,13 +165,15 @@ Public Sub PrintWithFrame()
     Dim i As Long, itm As Variant, inserted As Long
     For i = fills.Count To 1 Step -1
         itm = fills(i)
-        inserted = inserted + InsertFiller(ws, CLng(itm(0)), CDbl(itm(1)))
+        inserted = inserted + _
+            InsertFiller(ws, CLng(itm(0)), CDbl(itm(1)))
     Next i
     lastRow = lastRow + inserted
 
     ' --- проход 2: разрывы страниц и рамки ---------------------------
     Dim pages As Collection
-    Set pages = New Collection                  ' Array(верх страницы, высота)
+    ' элементы: Array(верх страницы, высота)
+    Set pages = New Collection
     Dim pTop As Double
     acc = 0: pTop = 0
     For r = 1 To lastRow
@@ -187,9 +194,11 @@ Public Sub PrintWithFrame()
         itm = pages(k)
         pTop = itm(0)
         If k = pages.Count Then
-            pH = cH                             ' последняя - на всю высоту
+            pH = cH             ' последняя - на всю высоту
         Else
-            pH = itm(1) - 0.75                  ' чтобы нижняя линия не ушла на следующий лист
+            ' минус 0.75 пт, чтобы нижняя линия
+            ' не ушла на следующий лист
+            pH = itm(1) - 0.75
         End If
         DrawFrameRect ws, pTop, cW, pH
     Next k
@@ -255,7 +264,8 @@ Public Sub PrintWithFrame()
 
 errH:
     Application.ScreenUpdating = True
-    MsgBox "Ошибка: " & Err.Description, vbExclamation, "Чертёжная рамка"
+    MsgBox "Ошибка: " & Err.Description, vbExclamation, _
+        "Чертёжная рамка"
     KillTmpSheet
     src.Activate
 End Sub
@@ -270,7 +280,9 @@ End Sub
 Private Sub DeleteFrameShapes(ws As Worksheet)
     Dim i As Long
     For i = ws.Shapes.Count To 1 Step -1
-        If Left$(ws.Shapes(i).Name, Len(PFX)) = PFX Then ws.Shapes(i).Delete
+        If Left$(ws.Shapes(i).Name, Len(PFX)) = PFX Then
+            ws.Shapes(i).Delete
+        End If
     Next i
 End Sub
 
@@ -290,10 +302,12 @@ End Sub
 Private Function InsertFiller(ws As Worksheet, ByVal afterRow As Long, _
     ByVal gap As Double) As Long
     Dim remain As Double, h As Double, n As Long
-    remain = gap - 1                            ' запас от переполнения страницы
+    ' минус 1 пт - запас от переполнения страницы
+    remain = gap - 1
     Do While remain > 0.5
         h = remain
-        If h > 400 Then h = 400                 ' предел высоты строки Excel
+        ' предел высоты строки Excel
+        If h > 400 Then h = 400
         ws.Rows(afterRow + 1).Insert Shift:=xlDown
         ws.Rows(afterRow + 1).Clear
         ws.Rows(afterRow + 1).RowHeight = h
@@ -321,16 +335,19 @@ End Sub
 '---------------------------------------------------------------------
 ' Основная надпись: форма 5 по ГОСТ 21.101 (185х40 мм).
 ' x0, y0 - левый верхний угол штампа в пунктах.
-Private Sub DrawStamp(ws As Worksheet, ByVal x0 As Double, ByVal y0 As Double)
+Private Sub DrawStamp(ws As Worksheet, _
+    ByVal x0 As Double, ByVal y0 As Double)
     Dim startIdx As Long
     startIdx = ws.Shapes.Count
 
     ' наружный контур
     Dim shp As Shape
-    Set shp = ws.Shapes.AddShape(msoShapeRectangle, x0, y0, MM(STAMP_W), MM(STAMP_H))
+    Set shp = ws.Shapes.AddShape(msoShapeRectangle, _
+        x0, y0, MM(STAMP_W), MM(STAMP_H))
     With shp
         .Name = NextName()
-        .Fill.ForeColor.RGB = vbWhite           ' маскирует линии сетки под штампом
+        ' белая заливка маскирует сетку под штампом
+        .Fill.ForeColor.RGB = vbWhite
         .Fill.Visible = msoTrue
         .Line.ForeColor.RGB = vbBlack
         .Line.Weight = W_MAIN
@@ -338,8 +355,10 @@ Private Sub DrawStamp(ws As Worksheet, ByVal x0 As Double, ByVal y0 As Double)
     End With
 
     ' --- левый блок 65 мм: таблица изменений и подписи ---------------
-    ' колонки: Изм.(10) Кол.уч.(10) Лист(10) № док.(10) Подп.(15) Дата(10)
-    StampLine ws, x0, y0, 10, 0, 10, 15, W_MAIN     ' только зона изменений
+    ' колонки: Изм.(10) Кол.уч.(10) Лист(10)
+    '          № док.(10) Подп.(15) Дата(10)
+    ' первые две вертикали - только зона изменений
+    StampLine ws, x0, y0, 10, 0, 10, 15, W_MAIN
     StampLine ws, x0, y0, 30, 0, 30, 15, W_MAIN
     StampLine ws, x0, y0, 20, 0, 20, 40, W_MAIN
     StampLine ws, x0, y0, 40, 0, 40, 40, W_MAIN
@@ -348,7 +367,8 @@ Private Sub DrawStamp(ws As Worksheet, ByVal x0 As Double, ByVal y0 As Double)
     ' строки зоны изменений и заголовок граф
     StampLine ws, x0, y0, 0, 5, 65, 5, W_THIN
     StampLine ws, x0, y0, 0, 10, 65, 10, W_THIN
-    StampLine ws, x0, y0, 0, 15, 185, 15, W_MAIN    ' общая линия с графой обозначения
+    ' общая линия с графой обозначения
+    StampLine ws, x0, y0, 0, 15, 185, 15, W_MAIN
     ' строки подписей
     StampLine ws, x0, y0, 0, 20, 65, 20, W_THIN
     StampLine ws, x0, y0, 0, 25, 65, 25, W_THIN
@@ -398,11 +418,13 @@ End Sub
 
 '---------------------------------------------------------------------
 ' Линия штампа: координаты в мм относительно левого верхнего угла штампа
-Private Sub StampLine(ws As Worksheet, ByVal x0 As Double, ByVal y0 As Double, _
+Private Sub StampLine(ws As Worksheet, _
+    ByVal x0 As Double, ByVal y0 As Double, _
     ByVal x1 As Double, ByVal y1 As Double, _
     ByVal x2 As Double, ByVal y2 As Double, ByVal wt As Double)
     Dim shp As Shape
-    Set shp = ws.Shapes.AddLine(x0 + MM(x1), y0 + MM(y1), x0 + MM(x2), y0 + MM(y2))
+    Set shp = ws.Shapes.AddLine(x0 + MM(x1), y0 + MM(y1), _
+        x0 + MM(x2), y0 + MM(y2))
     With shp
         .Name = NextName()
         .Line.ForeColor.RGB = vbBlack
@@ -413,7 +435,8 @@ End Sub
 
 '---------------------------------------------------------------------
 ' Надпись штампа: координаты и размеры в мм относительно угла штампа
-Private Sub StampText(ws As Worksheet, ByVal x0 As Double, ByVal y0 As Double, _
+Private Sub StampText(ws As Worksheet, _
+    ByVal x0 As Double, ByVal y0 As Double, _
     ByVal x1 As Double, ByVal y1 As Double, _
     ByVal wd As Double, ByVal ht As Double, _
     ByVal txt As String, ByVal sz As Double)
