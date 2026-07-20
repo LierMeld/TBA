@@ -176,15 +176,29 @@ Public Sub PrintWithFrame()
         DrawStampForm6 ws, frameW - MM(STAMP_W), sTop
     Next k
 
-    ' --- область печати: столбцы A..Q, строки до конца страницы ------
+    ' --- область печати ---------------------------------------------
+    ' Область печати должна полностью накрывать рамку и штамп, иначе
+    ' Excel обрежет их нижнюю и правую границы. Поэтому строки тянем
+    ' чуть ниже нижней линии рамки, а столбцы (начиная с Q) - вправо
+    ' до правого края рамки.
     Dim lastTop As Double, printLastRow As Long
     lastTop = pages(pages.Count)
     printLastRow = lastRow
-    Do While printLastRow < 100000
-        With ws.Rows(printLastRow + 1)
-            If .Top + .Height > lastTop + cH - 1 Then Exit Do
-        End With
+    Do While printLastRow < 1000000
+        If ws.Rows(printLastRow + 1).Top _
+            >= lastTop + frameH + MM(3) Then Exit Do
         printLastRow = printLastRow + 1
+    Loop
+
+    Dim printLastCol As Long, accCol As Double
+    accCol = 0
+    For i = 1 To LAST_COL
+        accCol = accCol + ws.Columns(i).Width
+    Next i
+    printLastCol = LAST_COL
+    Do While accCol < frameW + MM(3) And printLastCol < 16384
+        printLastCol = printLastCol + 1
+        accCol = accCol + ws.Columns(printLastCol).Width
     Loop
 
     ' --- параметры страницы -----------------------------------------
@@ -203,7 +217,7 @@ Public Sub PrintWithFrame()
         .Zoom = 100
         .PrintArea = ws.Range( _
             ws.Cells(1, FIRST_COL), _
-            ws.Cells(printLastRow, LAST_COL)).Address
+            ws.Cells(printLastRow, printLastCol)).Address
     End With
 
     Application.ScreenUpdating = True
