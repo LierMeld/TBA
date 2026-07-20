@@ -4,38 +4,53 @@ Option Explicit
 '=====================================================================
 '  Печать таблицы с чертёжной рамкой - Excel 2016
 '
+'  * Формат всегда A3, альбомная ориентация.
 '  * Поля листа по ГОСТ: слева 20 мм, сверху/справа/снизу 5 мм.
-'    Рамка чертится от края рабочей области листа (по границе полей),
-'    поэтому таблица, начинающаяся с ячейки A1, сразу попадает внутрь
-'    рамки.
-'  * Основная надпись - форма 5 по ГОСТ 21.101 (185х40 мм) на первом
-'    листе (по желанию).
-'  * Длинная таблица автоматически разбивается на страницы, каждая
-'    страница получает свою рамку. Строки, которые попали бы под
-'    штамп, переносятся на следующий лист.
+'  * Рамка чертится от края рабочей области листа.
+'  * Основная надпись - форма 6 по ГОСТ 21.101-2026 (185x15 мм)
+'    на КАЖДОМ листе, у нижней линии рамки.
+'  * Область печати - столбцы A..Q, число строк считается по
+'    содержимому листа.
+'  * Длинная таблица разбивается на страницы, каждая получает
+'    свою рамку и свой штамп.
 '
-'  Печать выполняется через временную копию листа, поэтому исходный
-'  лист НЕ изменяется.
+'  Печать идёт через временную копию листа - исходный лист НЕ
+'  изменяется.
 '
 '  Макросы для запуска (Alt+F8):
-'    PrintWithFrame - выбор формата (A4/A3), ориентации, штампа,
-'                     печать или предварительный просмотр
-'    RemoveFrame    - удаление фигур рамки/штампа с активного листа
-'                     (для очистки после старых версий макроса)
+'    PrintWithFrame - построить рамки, штампы и напечатать / открыть
+'                     предварительный просмотр
+'    RemoveFrame    - удалить фигуры рамки/штампа с активного листа
 '=====================================================================
 
-Private Const PFX As String = "GOST_"           ' префикс имён фигур
+Private Const PFX As String = "GOST_"
 Private Const TMP_SHEET As String = "GOST_PRINT_TMP"
 
 ' поля листа по ГОСТ, мм
 Private Const FLD_LEFT_MM As Double = 20
 Private Const FLD_OTHER_MM As Double = 5
 
-' основная надпись: форма 5 по ГОСТ 21.101, мм
+' формат печати - всегда A3 альбомная, мм
+Private Const SHEET_W_MM As Double = 420
+Private Const SHEET_H_MM As Double = 297
+
+' поправка ширины рамки, мм. Рамка сужается на это значение, а штамп
+' привязан к её правому краю и смещается на столько же. Если на вашем
+' принтере рамка всё ещё вылезает или, наоборот, не достаёт до края -
+' поменяйте только это число.
+Private Const FRAME_ADJUST_MM As Double = 28
+
+' нижний отступ рамки, мм (0 = рамка до самого нижнего поля)
+Private Const FRAME_BOTTOM_MM As Double = 0
+
+' основная надпись: форма 6 по ГОСТ 21.101-2026, мм
 Private Const STAMP_W As Double = 185
-Private Const STAMP_H As Double = 40
-' зазор между таблицей и штампом, мм
-Private Const STAMP_GAP As Double = 3
+Private Const STAMP_H As Double = 15
+Private Const STAMP_GAP As Double = 0           ' зазор таблица-штамп
+
+' столбцы области печати: A (1) .. Q (17)
+Private Const FIRST_COL As Long = 1
+Private Const LAST_COL As Long = 17
 
 ' толщина линий, пт (основная / тонкая)
 Private Const W_MAIN As Double = 2#
@@ -69,43 +84,16 @@ Public Sub PrintWithFrame()
         Exit Sub
     End If
 
-    ' --- выбор формата ----------------------------------------------
-    Dim ans As String
-    ans = UCase$(Trim$(InputBox( _
-        "Укажите формат листа для печати: A4 или A3", _
-        "Чертёжная рамка", "A4")))
-    If Len(ans) = 0 Then Exit Sub               ' нажата "Отмена"
-
-    Dim wMM As Double, hMM As Double, paper As XlPaperSize
-    Select Case ans
-        Case "A4", "А4": wMM = 210: hMM = 297: paper = xlPaperA4
-        Case "A3", "А3": wMM = 297: hMM = 420: paper = xlPaperA3
-        Case Else
-            MsgBox "Неизвестный формат: " & ans & vbCrLf & _
-                   "Допустимые значения: A4, A3.", vbExclamation
-            Exit Sub
-    End Select
-
-    ' --- ориентация -------------------------------------------------
-    Dim landscape As Boolean
-    landscape = (MsgBox("Альбомная ориентация листа?" & vbCrLf & _
-        "Да - альбомная, Нет - книжная.", _
-        vbYesNo + vbQuestion, "Ориентация") = vbYes)
-    If landscape Then
-        Dim t As Double
-        t = wMM: wMM = hMM: hMM = t
-    End If
-
-    ' --- основная надпись -------------------------------------------
-    Dim withStamp As Boolean
-    withStamp = (MsgBox("Добавить основную надпись " & _
-        "(форма 5 по ГОСТ 21.101, 185х40 мм) на первый лист?", _
-        vbYesNo + vbQuestion, "Основная надпись") = vbYes)
-
-    ' размеры рабочей области страницы (внутри полей), пт
+    ' рабочая область страницы (внутри полей), пт
     Dim cW As Double, cH As Double
-    cW = MM(wMM - FLD_LEFT_MM - FLD_OTHER_MM)
-    cH = MM(hMM - 2 * FLD_OTHER_MM)
+    cW = MM(SHEET_W_MM - FLD_LEFT_MM - FLD_OTHER_MM)
+    cH = MM(SHEET_H_MM - 2 * FLD_OTHER_MM)
+
+    ' ширина рамки с поправкой; штамп привязан к её правому краю
+    Dim frameW As Double
+    frameW = cW - MM(FRAME_ADJUST_MM)
+    Dim frameH As Double
+    frameH = cH - MM(FRAME_BOTTOM_MM)
 
     On Error GoTo errH
     Application.ScreenUpdating = False
@@ -117,43 +105,29 @@ Public Sub PrintWithFrame()
     Dim ws As Worksheet
     Set ws = ActiveSheet
     ws.Name = TMP_SHEET
-    DeleteFrameShapes ws        ' старые рамки, если были
+    DeleteFrameShapes ws
     ws.ResetAllPageBreaks
 
-    ' --- границы содержимого ----------------------------------------
+    ' --- последняя строка содержимого -------------------------------
     Dim lastRow As Long
     lastRow = ws.Cells.SpecialCells(xlCellTypeLastCell).Row
 
-    ' столбцы области печати - на всю ширину рабочей области
-    Dim lastCol As Long, accW As Double
-    accW = 0: lastCol = 0
-    Do While lastCol < 16000
-        If accW + ws.Columns(lastCol + 1).Width > cW + 0.5 Then Exit Do
-        lastCol = lastCol + 1
-        accW = accW + ws.Columns(lastCol).Width
-    Loop
-    If lastCol = 0 Then lastCol = 1
-
-    ' --- разбивка на страницы (проход 1: где нужны вставки) ---------
-    ' Каждая страница, кроме последней, добивается пустой строкой до
-    ' полной высоты рабочей области, чтобы рамки страниц совпадали с
-    ' границами бумаги. На первой странице при штампе резервируется
-    ' нижняя зона 40+3 мм.
+    ' --- разбивка на страницы (проход 1: строки-заполнители) --------
+    ' На каждой странице резервируется нижняя зона под штамп, а хвост
+    ' страницы добивается пустой строкой до полной высоты, чтобы рамки
+    ' совпадали с границами бумаги.
     Dim stampReserve As Double
-    If withStamp Then stampReserve = MM(STAMP_H + STAMP_GAP)
+    stampReserve = MM(STAMP_H + STAMP_GAP)
 
     Dim fills As Collection
-    ' элементы: Array(строка, высота вставки)
-    Set fills = New Collection
+    Set fills = New Collection      ' Array(строка, высота вставки)
     Dim r As Long, acc As Double, limit As Double, rowH As Double
-    limit = cH - stampReserve                   ' лимит первой страницы
+    limit = cH - stampReserve
     acc = 0: r = 1
     Do While r <= lastRow
         rowH = ws.Rows(r).Height
         If acc + rowH > limit + 0.3 And acc > 0 Then
-            fills.Add Array(r - 1, cH - acc)    ' добить страницу до cH
-            ' следующие страницы - без штампа
-            limit = cH
+            fills.Add Array(r - 1, cH - acc)
             acc = 0
         Else
             acc = acc + rowH
@@ -161,7 +135,7 @@ Public Sub PrintWithFrame()
         End If
     Loop
 
-    ' вставка пустых строк-заполнителей (снизу вверх)
+    ' вставка заполнителей снизу вверх
     Dim i As Long, itm As Variant, inserted As Long
     For i = fills.Count To 1 Step -1
         itm = fills(i)
@@ -170,56 +144,41 @@ Public Sub PrintWithFrame()
     Next i
     lastRow = lastRow + inserted
 
-    ' --- проход 2: разрывы страниц и рамки ---------------------------
+    ' --- проход 2: разрывы страниц, рамки, штампы --------------------
     Dim pages As Collection
-    ' элементы: Array(верх страницы, высота)
-    Set pages = New Collection
+    Set pages = New Collection      ' верх страницы, пт
     Dim pTop As Double
     acc = 0: pTop = 0
     For r = 1 To lastRow
         rowH = ws.Rows(r).Height
         If acc + rowH > cH + 0.3 And acc > 0 Then
-            pages.Add Array(pTop, acc)
+            pages.Add pTop
             ws.Rows(r).PageBreak = xlPageBreakManual
             pTop = ws.Rows(r).Top
             acc = 0
         End If
         acc = acc + rowH
     Next r
-    pages.Add Array(pTop, acc)                  ' последняя страница
+    pages.Add pTop
 
-    ' рамка на каждой странице
-    Dim k As Long, pH As Double
+    Dim k As Long, thisH As Double, sTop As Double
     For k = 1 To pages.Count
-        itm = pages(k)
-        pTop = itm(0)
+        pTop = pages(k)
+        ' нижняя линия чуть выше края, чтобы не ушла на след. лист
         If k = pages.Count Then
-            pH = cH             ' последняя - на всю высоту
+            thisH = frameH
         Else
-            ' минус 0.75 пт, чтобы нижняя линия
-            ' не ушла на следующий лист
-            pH = itm(1) - 0.75
+            thisH = frameH - 0.75
         End If
-        DrawFrameRect ws, pTop, cW, pH
+        DrawFrameRect ws, pTop, frameW, thisH
+        ' штамп формы 6 у нижней линии рамки
+        sTop = pTop + thisH - MM(STAMP_H)
+        DrawStampForm6 ws, frameW - MM(STAMP_W), sTop
     Next k
 
-    ' штамп на первой странице, вплотную к нижней линии рамки
-    If withStamp Then
-        itm = pages(1)
-        Dim sTop As Double
-        If pages.Count = 1 Then
-            sTop = cH - MM(STAMP_H)
-        Else
-            sTop = itm(0) + itm(1) - 0.75 - MM(STAMP_H)
-        End If
-        DrawStamp ws, cW - MM(STAMP_W), sTop
-    End If
-
-    ' область печати - до полной высоты последней страницы, чтобы
-    ' рамка и штамп гарантированно попали в печать
+    ' --- область печати: столбцы A..Q, строки до конца страницы ------
     Dim lastTop As Double, printLastRow As Long
-    itm = pages(pages.Count)
-    lastTop = itm(0)
+    lastTop = pages(pages.Count)
     printLastRow = lastRow
     Do While printLastRow < 100000
         With ws.Rows(printLastRow + 1)
@@ -228,11 +187,11 @@ Public Sub PrintWithFrame()
         printLastRow = printLastRow + 1
     Loop
 
-    ' --- параметры страницы ------------------------------------------
+    ' --- параметры страницы -----------------------------------------
     With ws.PageSetup
-        .PaperSize = paper
-        .Orientation = IIf(landscape, xlLandscape, xlPortrait)
-        .LeftMargin = MM(FLD_LEFT_MM)           ' поля по ГОСТ
+        .PaperSize = xlPaperA3
+        .Orientation = xlLandscape
+        .LeftMargin = MM(FLD_LEFT_MM)
         .RightMargin = MM(FLD_OTHER_MM)
         .TopMargin = MM(FLD_OTHER_MM)
         .BottomMargin = MM(FLD_OTHER_MM)
@@ -241,18 +200,21 @@ Public Sub PrintWithFrame()
         .LeftFooter = "": .CenterFooter = "": .RightFooter = ""
         .CenterHorizontally = False
         .CenterVertically = False
-        .Zoom = 100                             ' печать строго 1:1
-        .PrintArea = ws.Range(ws.Cells(1, 1), _
-            ws.Cells(printLastRow, lastCol)).Address
+        .Zoom = 100
+        .PrintArea = ws.Range( _
+            ws.Cells(1, FIRST_COL), _
+            ws.Cells(printLastRow, LAST_COL)).Address
     End With
 
     Application.ScreenUpdating = True
 
-    ' --- печать / предварительный просмотр ---------------------------
-    If MsgBox("Листов к печати: " & pages.Count & vbCrLf & vbCrLf & _
+    ' --- печать / предварительный просмотр --------------------------
+    Dim msg As String
+    msg = "Формат: A3 альбомная. Листов к печати: " & _
+        pages.Count & vbCrLf & vbCrLf & _
         "Отправить на печать сразу?" & vbCrLf & _
-        "Нет - открыть предварительный просмотр.", _
-        vbYesNo + vbQuestion, "Печать") = vbYes Then
+        "Нет - открыть предварительный просмотр."
+    If MsgBox(msg, vbYesNo + vbQuestion, "Печать") = vbYes Then
         ws.PrintOut
     Else
         ws.PrintPreview
@@ -271,7 +233,6 @@ errH:
 End Sub
 
 '---------------------------------------------------------------------
-' Удаление всех фигур рамки/штампа с активного листа
 Public Sub RemoveFrame()
     If TypeName(ActiveSheet) <> "Worksheet" Then Exit Sub
     DeleteFrameShapes ActiveSheet
@@ -287,7 +248,6 @@ Private Sub DeleteFrameShapes(ws As Worksheet)
 End Sub
 
 '---------------------------------------------------------------------
-' Удаление временного листа печати
 Private Sub KillTmpSheet()
     On Error Resume Next
     Application.DisplayAlerts = False
@@ -299,8 +259,8 @@ End Sub
 '---------------------------------------------------------------------
 ' Вставка пустых строк-заполнителей общей высотой gap (пт) после
 ' строки afterRow. Возвращает число вставленных строк.
-Private Function InsertFiller(ws As Worksheet, ByVal afterRow As Long, _
-    ByVal gap As Double) As Long
+Private Function InsertFiller(ws As Worksheet, _
+    ByVal afterRow As Long, ByVal gap As Double) As Long
     Dim remain As Double, h As Double, n As Long
     ' минус 1 пт - запас от переполнения страницы
     remain = gap - 1
@@ -322,7 +282,8 @@ End Function
 Private Sub DrawFrameRect(ws As Worksheet, ByVal topPt As Double, _
     ByVal wPt As Double, ByVal hPt As Double)
     Dim shp As Shape
-    Set shp = ws.Shapes.AddShape(msoShapeRectangle, 0, topPt, wPt, hPt)
+    Set shp = ws.Shapes.AddShape(msoShapeRectangle, _
+        0, topPt, wPt, hPt)
     With shp
         .Name = NextName()
         .Fill.Visible = msoFalse
@@ -333,20 +294,21 @@ Private Sub DrawFrameRect(ws As Worksheet, ByVal topPt As Double, _
 End Sub
 
 '---------------------------------------------------------------------
-' Основная надпись: форма 5 по ГОСТ 21.101 (185х40 мм).
-' x0, y0 - левый верхний угол штампа в пунктах.
-Private Sub DrawStamp(ws As Worksheet, _
+' Основная надпись: форма 6 по ГОСТ 21.101-2026 (185x15 мм).
+' Левый блок - таблица изменений (6 граф), правый блок - графа "Лист",
+' центр - обозначение документа (заполняется вручную).
+' x0, y0 - левый верхний угол штампа, пт.
+Private Sub DrawStampForm6(ws As Worksheet, _
     ByVal x0 As Double, ByVal y0 As Double)
     Dim startIdx As Long
     startIdx = ws.Shapes.Count
 
-    ' наружный контур
+    ' наружный контур (белая заливка маскирует сетку под штампом)
     Dim shp As Shape
     Set shp = ws.Shapes.AddShape(msoShapeRectangle, _
         x0, y0, MM(STAMP_W), MM(STAMP_H))
     With shp
         .Name = NextName()
-        ' белая заливка маскирует сетку под штампом
         .Fill.ForeColor.RGB = vbWhite
         .Fill.Visible = msoTrue
         .Line.ForeColor.RGB = vbBlack
@@ -354,53 +316,32 @@ Private Sub DrawStamp(ws As Worksheet, _
         .Placement = xlFreeFloating
     End With
 
-    ' --- левый блок 65 мм: таблица изменений и подписи ---------------
-    ' колонки: Изм.(10) Кол.уч.(10) Лист(10)
-    '          № док.(10) Подп.(15) Дата(10)
-    ' первые две вертикали - только зона изменений
-    StampLine ws, x0, y0, 10, 0, 10, 15, W_MAIN
-    StampLine ws, x0, y0, 30, 0, 30, 15, W_MAIN
-    StampLine ws, x0, y0, 20, 0, 20, 40, W_MAIN
-    StampLine ws, x0, y0, 40, 0, 40, 40, W_MAIN
-    StampLine ws, x0, y0, 55, 0, 55, 40, W_MAIN
-    StampLine ws, x0, y0, 65, 0, 65, 40, W_MAIN
-    ' строки зоны изменений и заголовок граф
-    StampLine ws, x0, y0, 0, 5, 65, 5, W_THIN
-    StampLine ws, x0, y0, 0, 10, 65, 10, W_THIN
-    ' общая линия с графой обозначения
-    StampLine ws, x0, y0, 0, 15, 185, 15, W_MAIN
-    ' строки подписей
-    StampLine ws, x0, y0, 0, 20, 65, 20, W_THIN
-    StampLine ws, x0, y0, 0, 25, 65, 25, W_THIN
-    StampLine ws, x0, y0, 0, 30, 65, 30, W_THIN
-    StampLine ws, x0, y0, 0, 35, 65, 35, W_THIN
-    ' заголовки граф таблицы изменений
-    StampText ws, x0, y0, 0, 10, 10, 5, "Изм.", 6
-    StampText ws, x0, y0, 10, 10, 10, 5, "Кол.уч.", 6
-    StampText ws, x0, y0, 20, 10, 10, 5, "Лист", 6
-    StampText ws, x0, y0, 30, 10, 10, 5, "№ док.", 6
-    StampText ws, x0, y0, 40, 10, 15, 5, "Подп.", 6
-    StampText ws, x0, y0, 55, 10, 10, 5, "Дата", 6
-    ' подписи (графы 10-13 - должности по усмотрению организации)
-    StampText ws, x0, y0, 0, 15, 20, 5, "Разраб.", 7
-    StampText ws, x0, y0, 0, 20, 20, 5, "Пров.", 7
-    StampText ws, x0, y0, 0, 30, 20, 5, "Н.контр.", 7
-    StampText ws, x0, y0, 0, 35, 20, 5, "Утв.", 7
+    ' --- левый блок 62 мм: таблица изменений ------------------------
+    ' колонки: Изм.(7) Кол.уч.(10) Лист(10) № док.(10) Подп.(15) Дата(10)
+    StampLine ws, x0, y0, 7, 0, 7, 15, W_MAIN
+    StampLine ws, x0, y0, 17, 0, 17, 15, W_MAIN
+    StampLine ws, x0, y0, 27, 0, 27, 15, W_MAIN
+    StampLine ws, x0, y0, 37, 0, 37, 15, W_MAIN
+    StampLine ws, x0, y0, 52, 0, 52, 15, W_MAIN
+    StampLine ws, x0, y0, 62, 0, 62, 15, W_MAIN
+    ' горизонталь заголовок/данные внутри левого блока
+    StampLine ws, x0, y0, 0, 8, 62, 8, W_THIN
 
-    ' --- средняя часть: обозначение (65..185 x 0..15) и наименование --
-    ' (обозначение и наименование заполняются вручную)
+    ' заголовки граф таблицы изменений (верхняя строка)
+    StampText ws, x0, y0, 0, 0, 7, 8, "Изм.", 5
+    StampText ws, x0, y0, 7, 0, 10, 8, "Кол.уч.", 5
+    StampText ws, x0, y0, 17, 0, 10, 8, "Лист", 5
+    StampText ws, x0, y0, 27, 0, 10, 8, "№ док.", 5
+    StampText ws, x0, y0, 37, 0, 15, 8, "Подп.", 5
+    StampText ws, x0, y0, 52, 0, 10, 8, "Дата", 5
 
-    ' --- правый блок 50 мм: Стадия / Лист / Листов, организация -------
-    StampLine ws, x0, y0, 135, 15, 135, 40, W_MAIN
-    StampLine ws, x0, y0, 150, 15, 150, 30, W_MAIN
-    StampLine ws, x0, y0, 165, 15, 165, 30, W_MAIN
-    StampLine ws, x0, y0, 135, 20, 185, 20, W_THIN
-    StampLine ws, x0, y0, 135, 30, 185, 30, W_MAIN
-    StampText ws, x0, y0, 135, 15, 15, 5, "Стадия", 6
-    StampText ws, x0, y0, 150, 15, 15, 5, "Лист", 6
-    StampText ws, x0, y0, 165, 15, 20, 5, "Листов", 6
+    ' --- правый блок: графа "Лист" (10 мм) --------------------------
+    StampLine ws, x0, y0, 175, 0, 175, 15, W_MAIN
+    StampText ws, x0, y0, 175, 0, 10, 8, "Лист", 5
 
-    ' --- группировка фигур штампа в одну ------------------------------
+    ' центр (62..175) - обозначение документа, заполняется вручную
+
+    ' --- группировка фигур штампа в одну ----------------------------
     Dim cnt As Long
     cnt = ws.Shapes.Count - startIdx
     If cnt > 1 Then
@@ -410,14 +351,14 @@ Private Sub DrawStamp(ws As Worksheet, _
             arr(i - 1) = ws.Shapes(startIdx + i).Name
         Next i
         With ws.Shapes.Range(arr).Group
-            .Name = PFX & "Stamp"
+            .Name = NextName()
             .Placement = xlFreeFloating
         End With
     End If
 End Sub
 
 '---------------------------------------------------------------------
-' Линия штампа: координаты в мм относительно левого верхнего угла штампа
+' Линия штампа: координаты в мм относительно угла штампа
 Private Sub StampLine(ws As Worksheet, _
     ByVal x0 As Double, ByVal y0 As Double, _
     ByVal x1 As Double, ByVal y1 As Double, _
