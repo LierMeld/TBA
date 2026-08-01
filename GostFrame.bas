@@ -58,6 +58,9 @@ Private Const STAMP_GAP As Double = 1           ' зазор таблица-штамп
 Private Const FIRST_COL As Long = 1
 Private Const LAST_COL As Long = 17
 
+' заголовок таблицы, повтор€емый на каждом листе (строки 1..N)
+Private Const HEADER_ROWS As Long = 4
+
 ' --- формирование спецификации ---------------------------------
 Private Const SPEC_SRC_SHEET As String = "“аблица кабелей"
 Private Const SPEC_DST_SHEET As String = "—пецификаци€"
@@ -120,36 +123,47 @@ Public Sub PrintWithFrame()
     Dim lastRow As Long
     lastRow = ws.Cells.SpecialCells(xlCellTypeLastCell).Row
 
-    ' --- разбивка на страницы (проход 1: строки-заполнители) --------
-    ' Ќа каждой странице резервируетс€ нижн€€ зона под штамп, а хвост
-    ' страницы добиваетс€ пустой строкой до полной высоты, чтобы рамки
-    ' совпадали с границами бумаги.
+    ' --- разбивка на страницы (проход 1: планирование) --------------
+    ' Ќа каждой странице сверху повтор€етс€ заголовок (строки 1..
+    ' HEADER_ROWS), снизу резервируетс€ зона под штамп, а хвост
+    ' страницы добиваетс€ пустой строкой до полной высоты листа.
     Dim stampReserve As Double
     stampReserve = MM(STAMP_H + STAMP_GAP)
 
-    Dim fills As Collection
-    Set fills = New Collection      ' Array(строка, высота вставки)
+    ' высота заголовка (строки 1..HEADER_ROWS)
+    Dim hHead As Double, hr As Long
+    hHead = 0
+    For hr = 1 To HEADER_ROWS
+        hHead = hHead + ws.Rows(hr).Height
+    Next hr
+
+    ' границы страниц: r - перва€ строка данных следующей страницы,
+    ' fillH - чем добить закрываемую страницу до полной высоты листа
+    Dim brks As Collection
+    Set brks = New Collection       ' Array(r, fillH)
     Dim r As Long, acc As Double, limit As Double, rowH As Double
-    limit = cH - stampReserve
-    acc = 0: r = 1
+    limit = cH - hHead - stampReserve
+    acc = 0: r = HEADER_ROWS + 1
     Do While r <= lastRow
         rowH = ws.Rows(r).Height
         If acc + rowH > limit + 0.3 And acc > 0 Then
-            fills.Add Array(r - 1, cH - acc)
+            brks.Add Array(r, cH - hHead - acc)
             acc = 0
         Else
             acc = acc + rowH
             r = r + 1
         End If
     Loop
-    ' вставка заполнителей снизу вверх
-    Dim i As Long, itm As Variant, inserted As Long
-    For i = fills.Count To 1 Step -1
-        itm = fills(i)
-        inserted = inserted + _
-            InsertFiller(ws, CLng(itm(0)), CDbl(itm(1)))
+
+    ' вставка снизу вверх: на каждой границе - копи€ заголовка сверху
+    ' новой страницы и заполнитель снизу предыдущей
+    Dim i As Long, itm As Variant
+    For i = brks.Count To 1 Step -1
+        itm = brks(i)
+        InsertHeaderCopy ws, CLng(itm(0)), HEADER_ROWS
+        InsertFiller ws, CLng(itm(0)) - 1, CDbl(itm(1))
     Next i
-    lastRow = lastRow + inserted
+    lastRow = ws.Cells.SpecialCells(xlCellTypeLastCell).Row
     ' --- проход 2: разрывы страниц, рамки, штампы --------------------
     Dim pages As Collection
     Set pages = New Collection      ' верх страницы, пт
@@ -480,6 +494,16 @@ Private Function InsertFiller(ws As Worksheet, _
     Loop
     InsertFiller = N
 End Function
+
+'---------------------------------------------------------------------
+' ¬ставка копии строк заголовка (1..nRows) перед строкой beforeRow.
+Private Sub InsertHeaderCopy(ws As Worksheet, ByVal beforeRow As Long, _
+    ByVal nRows As Long)
+    ws.Rows("1:" & nRows).Copy
+    ws.Rows(beforeRow & ":" & (beforeRow + nRows - 1)).Insert _
+        Shift:=xlDown
+    Application.CutCopyMode = False
+End Sub
 
 '---------------------------------------------------------------------
 ' –амка одной страницы: от кра€ рабочей области листа
