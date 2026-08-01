@@ -66,6 +66,7 @@ Private Const SPEC_SRC_SHEET As String = "Таблица кабелей"
 Private Const SPEC_DST_SHEET As String = "Спецификация"
 Private Const SPEC_TYPE_SRC_COL As Long = 5   ' E - тип кабеля
 Private Const SPEC_LEN_SRC_COL As Long = 17   ' Q - длина, м
+Private Const SPEC_PIPE_SRC_COL As Long = 16  ' P - строка труб/МР
 Private Const SPEC_START_ROW As Long = 2      ' первая строка вывода
 Private Const SPEC_TYPE_DST_COL As Long = 1   ' куда писать тип (A)
 Private Const SPEC_LEN_DST_COL As Long = 2    ' куда писать сумму (B)
@@ -359,75 +360,104 @@ Public Sub BuildSpecification()
     Set src = Worksheets(SPEC_SRC_SHEET)
     Set dst = Worksheets(SPEC_DST_SHEET)
 
-    ' --- суммирование длин по типам ---------------------------------
-    Dim dict As Object
-    Set dict = CreateObject("Scripting.Dictionary")
-    dict.CompareMode = vbTextCompare   ' типы без учёта регистра
-
+    ' ===== 1. Кабели: сумма длин по типам (E - тип, Q - длина) ======
+    Dim cab As Object
+    Set cab = CreateObject("Scripting.Dictionary")
+    cab.CompareMode = vbTextCompare
     Dim lastRow As Long, r As Long, t As String, v As Variant
     lastRow = src.Cells(src.Rows.Count, SPEC_TYPE_SRC_COL).End(xlUp).Row
     For r = 1 To lastRow
         t = Trim$(CStr(src.Cells(r, SPEC_TYPE_SRC_COL).Value))
         v = src.Cells(r, SPEC_LEN_SRC_COL).Value
         If Len(t) > 0 And IsNumeric(v) Then
-            dict(t) = dict(t) + CDbl(v)
+            cab(t) = cab(t) + CDbl(v)
         End If
     Next r
 
-    If dict.Count = 0 Then
+    ' ===== 2. Трубы и металлорукава: разбор строки в столбце P ======
+    ' Формат: Тр|МР + Dn<диаметр> + тире + длина, напр. "Тр Dn20-15".
+    ' В одной ячейке может быть несколько записей.
+    Dim rx As Object
+    Set rx = CreateObject("VBScript.RegExp")
+    rx.Global = True
+    rx.IgnoreCase = False
+    rx.Pattern = "(Тр|МР)\s*\.?\s*[Dd][Nn]\s*(\d+(?:[.,]\d+)?)" & _
+        "\s*[-–—]\s*(\d+(?:[.,]\d+)?)"
+
+    Dim pipe As Object
+    Set pipe = CreateObject("Scripting.Dictionary")
+    pipe.CompareMode = vbTextCompare
+    Dim lastP As Long, cellTxt As String, mt As Object
+    Dim kind As String, dia As String, pkey As String, lng As Double
+    lastP = src.Cells(src.Rows.Count, SPEC_PIPE_SRC_COL).End(xlUp).Row
+    For r = 1 To lastP
+        cellTxt = CStr(src.Cells(r, SPEC_PIPE_SRC_COL).Value)
+        If Len(cellTxt) > 0 Then
+            For Each mt In rx.Execute(cellTxt)
+                kind = mt.SubMatches(0)
+                dia = mt.SubMatches(1)
+                lng = Val(Replace(mt.SubMatches(2), ",", "."))
+                pkey = kind & "|" & dia
+                pipe(pkey) = pipe(pkey) + lng
+            Next mt
+        End If
+    Next r
+
+    If cab.Count = 0 And pipe.Count = 0 Then
         MsgBox "На листе '" & SPEC_SRC_SHEET & "' не найдено " & _
-            "строк с типом (E) и числовой длиной (Q).", vbExclamation
+            "данных для спецификации.", vbExclamation
         Exit Sub
     End If
 
-    ' --- сортировка типов по алфавиту -------------------------------
-    Dim keyArr() As String, i As Long, j As Long, tmp As String
-    ReDim keyArr(0 To dict.Count - 1)
-    Dim key As Variant, idx As Long
-    idx = 0
-    For Each key In dict.Keys
-        keyArr(idx) = key
-        idx = idx + 1
-    Next key
-    For i = 0 To UBound(keyArr) - 1
-        For j = i + 1 To UBound(keyArr)
-            If keyArr(j) < keyArr(i) Then
-                tmp = keyArr(i): keyArr(i) = keyArr(j): keyArr(j) = tmp
-            End If
-        Next j
-    Next i
-
     Application.ScreenUpdating = False
 
-    ' --- очистка прежнего вывода (только мои столбцы) ---------------
+    ' --- очистка прежнего вывода и разрывов страниц -----------------
     Dim lastDst As Long
     lastDst = dst.Cells(dst.Rows.Count, SPEC_TYPE_DST_COL).End(xlUp).Row
     If lastDst < SPEC_START_ROW Then lastDst = SPEC_START_ROW
     dst.Range(dst.Cells(SPEC_START_ROW, SPEC_TYPE_DST_COL), _
         dst.Cells(lastDst, SPEC_LEN_DST_COL)).ClearContents
+    dst.ResetAllPageBreaks
 
-    ' --- заголовок --------------------------------------------------
-    dst.Cells(SPEC_START_ROW, SPEC_TYPE_DST_COL).Value = "Тип кабеля"
-    dst.Cells(SPEC_START_ROW, SPEC_LEN_DST_COL).Value = _
-        "Суммарная длина, м"
+    ' --- таблица кабелей --------------------------------------------
+    Dim i As Long, cabLast As Long
+    cabLast = SPEC_START_ROW - 1
+    If cab.Count > 0 Then
+        Dim ck() As String, cl() As String, cv() As Double
+        SortDictKeysText cab, ck
+        ReDim cl(0 To UBound(ck)): ReDim cv(0 To UBound(ck))
+        For i = 0 To UBound(ck)
+            cl(i) = ck(i)
+            cv(i) = cab(ck(i))
+        Next i
+        cabLast = WriteTwoColTable(dst, SPEC_START_ROW, _
+            "Тип кабеля", "Суммарная длина, м", cl, cv, "Итого")
+    End If
 
-    ' --- строки и итог ----------------------------------------------
-    Dim total As Double, rowOut As Long
-    rowOut = SPEC_START_ROW + 1
-    For i = 0 To UBound(keyArr)
-        dst.Cells(rowOut, SPEC_TYPE_DST_COL).Value = keyArr(i)
-        dst.Cells(rowOut, SPEC_LEN_DST_COL).Value = dict(keyArr(i))
-        total = total + dict(keyArr(i))
-        rowOut = rowOut + 1
-    Next i
-    dst.Cells(rowOut, SPEC_TYPE_DST_COL).Value = "Итого"
-    dst.Cells(rowOut, SPEC_LEN_DST_COL).Value = total
+    ' --- таблица труб и металлорукавов (с новой страницы) -----------
+    Dim pipeLast As Long, pipeStart As Long, pipeCnt As Long
+    pipeLast = cabLast
+    If pipe.Count > 0 Then
+        pipeStart = cabLast + 2
+        dst.Rows(pipeStart).PageBreak = xlPageBreakManual
+        Dim pk() As String, pl() As String, pv() As Double
+        SortPipeKeys pipe, pk
+        ReDim pl(0 To UBound(pk)): ReDim pv(0 To UBound(pk))
+        For i = 0 To UBound(pk)
+            pl(i) = PipeLabel(pk(i))
+            pv(i) = pipe(pk(i))
+        Next i
+        pipeLast = WriteTwoColTable(dst, pipeStart, _
+            "Труба / металлорукав, Dn", "Суммарная длина, м", _
+            pl, pv, "Итого")
+        pipeCnt = pipe.Count
+    End If
 
     Application.ScreenUpdating = True
     dst.Activate
     MsgBox "Спецификация обновлена." & vbCrLf & _
-        "Типов кабеля: " & dict.Count & vbCrLf & _
-        "Суммарная длина: " & Format(total, "0.###") & " м.", _
+        "Типов кабеля: " & cab.Count & vbCrLf & _
+        "Позиций труб/металлорукавов: " & pipeCnt, _
         vbInformation, "Спецификация"
     Exit Sub
 
@@ -435,6 +465,86 @@ errH:
     Application.ScreenUpdating = True
     MsgBox "Ошибка: " & Err.Description, vbExclamation, "Спецификация"
 End Sub
+
+'---------------------------------------------------------------------
+' Ключи словаря -> отсортированный по алфавиту строковый массив
+Private Sub SortDictKeysText(dict As Object, ByRef arr() As String)
+    ReDim arr(0 To dict.Count - 1)
+    Dim key As Variant, idx As Long
+    idx = 0
+    For Each key In dict.Keys
+        arr(idx) = key: idx = idx + 1
+    Next key
+    Dim i As Long, j As Long, tmp As String
+    For i = 0 To UBound(arr) - 1
+        For j = i + 1 To UBound(arr)
+            If arr(j) < arr(i) Then
+                tmp = arr(i): arr(i) = arr(j): arr(j) = tmp
+            End If
+        Next j
+    Next i
+End Sub
+
+'---------------------------------------------------------------------
+' Ключи труб ("Тр|20") -> трубы раньше МР, затем по диаметру
+Private Sub SortPipeKeys(dict As Object, ByRef arr() As String)
+    ReDim arr(0 To dict.Count - 1)
+    Dim key As Variant, idx As Long
+    idx = 0
+    For Each key In dict.Keys
+        arr(idx) = key: idx = idx + 1
+    Next key
+    Dim i As Long, j As Long, tmp As String
+    For i = 0 To UBound(arr) - 1
+        For j = i + 1 To UBound(arr)
+            If PipeSortVal(arr(j)) < PipeSortVal(arr(i)) Then
+                tmp = arr(i): arr(i) = arr(j): arr(j) = tmp
+            End If
+        Next j
+    Next i
+End Sub
+
+'---------------------------------------------------------------------
+' Числовой ключ сортировки: тип*100000 + диаметр
+Private Function PipeSortVal(ByVal key As String) As Double
+    Dim p As Long, kind As String, dia As Double
+    p = InStr(key, "|")
+    kind = Left$(key, p - 1)
+    dia = Val(Replace(Mid$(key, p + 1), ",", "."))
+    PipeSortVal = IIf(kind = "Тр", 0, 100000) + dia
+End Function
+
+'---------------------------------------------------------------------
+' Ключ "Тр|20" -> подпись "Труба Dn20" / "Металлорукав Dn20"
+Private Function PipeLabel(ByVal key As String) As String
+    Dim p As Long, kind As String, dia As String, nm As String
+    p = InStr(key, "|")
+    kind = Left$(key, p - 1)
+    dia = Mid$(key, p + 1)
+    If kind = "Тр" Then nm = "Труба" Else nm = "Металлорукав"
+    PipeLabel = nm & " Dn" & dia
+End Function
+
+'---------------------------------------------------------------------
+' Запись таблицы: заголовок, строки, итог; возвращает строку итога
+Private Function WriteTwoColTable(dst As Worksheet, _
+    ByVal startRow As Long, ByVal h1 As String, ByVal h2 As String, _
+    labels() As String, vals() As Double, _
+    ByVal totalLabel As String) As Long
+    Dim i As Long, rr As Long, total As Double
+    dst.Cells(startRow, SPEC_TYPE_DST_COL).Value = h1
+    dst.Cells(startRow, SPEC_LEN_DST_COL).Value = h2
+    rr = startRow + 1
+    For i = LBound(labels) To UBound(labels)
+        dst.Cells(rr, SPEC_TYPE_DST_COL).Value = labels(i)
+        dst.Cells(rr, SPEC_LEN_DST_COL).Value = vals(i)
+        total = total + vals(i)
+        rr = rr + 1
+    Next i
+    dst.Cells(rr, SPEC_TYPE_DST_COL).Value = totalLabel
+    dst.Cells(rr, SPEC_LEN_DST_COL).Value = total
+    WriteTwoColTable = rr
+End Function
 
 Private Sub DeleteFrameShapes(ws As Worksheet)
     Dim i As Long
