@@ -375,14 +375,15 @@ Public Sub BuildSpecification()
     Next r
 
     ' ===== 2. Трубы и металлорукава: разбор строки в столбце P ======
-    ' Формат: Тр|МР + Dn<диаметр> + тире + длина, напр. "Тр Dn20-15".
-    ' В одной ячейке может быть несколько записей.
+    ' Формат: Тр|МР + диаметр + тире + длина(+"м"), напр. "Тр25-3м".
+    ' "Dn" перед диаметром необязательно. В одной ячейке может быть
+    ' несколько записей через запятую.
     Dim rx As Object
     Set rx = CreateObject("VBScript.RegExp")
     rx.Global = True
     rx.IgnoreCase = False
-    rx.Pattern = "(Тр|МР)\s*\.?\s*[Dd][Nn]\s*(\d+(?:[.,]\d+)?)" & _
-        "\s*[-–—]\s*(\d+(?:[.,]\d+)?)"
+    rx.Pattern = "(Тр|МР)\s*\.?\s*(?:[Dd][Nn])?\s*" & _
+        "(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)"
 
     Dim pipe As Object
     Set pipe = CreateObject("Scripting.Dictionary")
