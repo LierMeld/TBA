@@ -109,7 +109,8 @@ Windows-1251). Поэтому файл `GostFrame.bas` сохранён в Windo
   Длина, м**. «Кол-во позиций» — сколько строк данного типа; «Экран»
   показывает наличие экранирования по букве **Э** в названии типа.
 - В таблице труб и металлорукавов только **наименование и суммарная
-  длина** (без количества и экрана).
+  длина** (без количества и экрана). Столбец «Длина, м» — тот же, что
+  и в таблице кабелей, поэтому колонки совпадают на всех листах.
 - Лист «Спецификация» формируется заново при каждом запуске (прежнее
   содержимое очищается) и оформляется рамками формата **A4 книжная**
   с основной надписью формы 6 и левым штампом на каждом листе.
@@ -725,20 +726,16 @@ Private Function WriteSpecTable(dst As Worksheet, _
     names() As String, cnts() As Long, scrs() As String, _
     lens() As Double, ByVal showScr As Boolean, _
     ByVal showCnt As Boolean) As Long
-    Dim i As Long, rr As Long, lenCol As Long
+    Dim i As Long, rr As Long
     Dim totalCnt As Long, totalLen As Double
-    ' без столбца количества длина идёт сразу после наименования
-    If showCnt Then
-        lenCol = SPEC_LEN_DST_COL
-    Else
-        lenCol = SPEC_CNT_DST_COL
-    End If
+    ' длина всегда в одном столбце - колонки совпадают на всех
+    ' листах спецификации
     dst.Cells(startRow, SPEC_TYPE_DST_COL).Value = nameHead
     If showCnt Then
         dst.Cells(startRow, SPEC_CNT_DST_COL).Value = "Кол-во"
     End If
     If showScr Then dst.Cells(startRow, SPEC_SCR_DST_COL).Value = "Экран"
-    dst.Cells(startRow, lenCol).Value = "Длина, м"
+    dst.Cells(startRow, SPEC_LEN_DST_COL).Value = "Длина, м"
     rr = startRow + 1
     For i = LBound(names) To UBound(names)
         dst.Cells(rr, SPEC_TYPE_DST_COL).Value = names(i)
@@ -747,13 +744,13 @@ Private Function WriteSpecTable(dst As Worksheet, _
             totalCnt = totalCnt + cnts(i)
         End If
         If showScr Then dst.Cells(rr, SPEC_SCR_DST_COL).Value = scrs(i)
-        dst.Cells(rr, lenCol).Value = lens(i)
+        dst.Cells(rr, SPEC_LEN_DST_COL).Value = lens(i)
         totalLen = totalLen + lens(i)
         rr = rr + 1
     Next i
     dst.Cells(rr, SPEC_TYPE_DST_COL).Value = "Итого"
     If showCnt Then dst.Cells(rr, SPEC_CNT_DST_COL).Value = totalCnt
-    dst.Cells(rr, lenCol).Value = totalLen
+    dst.Cells(rr, SPEC_LEN_DST_COL).Value = totalLen
     WriteSpecTable = rr
 End Function
 
