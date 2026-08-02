@@ -105,10 +105,16 @@ Windows-1251). Поэтому файл `GostFrame.bas` сохранён в Windo
   пропускаются — так автоматически отсекаются заголовки и итоги.
 - Одинаковые типы объединяются (без учёта регистра), длины
   суммируются, список сортируется по алфавиту.
-- Результат — на листе «Спецификация», столбцы **A/B** начиная со
-  строки 2: «Тип кабеля» | «Суммарная длина, м», в конце строка
-  «Итого». При повторном запуске прежний вывод в этих столбцах
-  очищается.
+- В таблице кабелей столбцы: **Тип кабеля | Кол-во позиций | Экран |
+  Длина, м**. «Кол-во позиций» — сколько строк данного типа; «Экран»
+  показывает наличие экранирования по букве **Э** в названии типа.
+- Лист «Спецификация» формируется заново при каждом запуске (прежнее
+  содержимое очищается) и оформляется рамками формата **A4 книжная**
+  с основной надписью формы 6 и левым штампом на каждом листе.
+  Таблица кабелей и таблица труб — на разных листах.
+- Листы спецификации добавляются в общий счётчик листов: запускайте в
+  порядке **PrintWithFrame → BuildSpecification → PrintWithFrameAnn**,
+  тогда номера листов и общее число в штампах будут сквозными.
 
 Запуск: `Alt+F8` → **BuildSpecification**.
 
@@ -173,7 +179,8 @@ Private Const TMP_SHEET As String = "КЖ"
 ' Данные для основной надписи
 Private Const cipher As String = "1.2.1.NT307R.00.001.AK04.GK01"
 Private Const Date0 As String = "30.07.26"
-Private CountPageAll As Double ' общее количество листов
+Private CountPageAll As Double ' листов до спецификации
+Private PagesSpec As Double    ' листов спецификации
 Private Const PAGE_OFFSET As Long = 3 ' число предшествующих листов
 
 ' поля листа по ГОСТ, мм
@@ -212,8 +219,17 @@ Private Const SPEC_TYPE_SRC_COL As Long = 5   ' E - тип кабеля
 Private Const SPEC_LEN_SRC_COL As Long = 17   ' Q - длина, м
 Private Const SPEC_PIPE_SRC_COL As Long = 16  ' P - строка труб/МР
 Private Const SPEC_START_ROW As Long = 2      ' первая строка вывода
-Private Const SPEC_TYPE_DST_COL As Long = 1   ' куда писать тип (A)
-Private Const SPEC_LEN_DST_COL As Long = 2    ' куда писать сумму (B)
+' A - левое поле (гутер), таблица с B
+Private Const SPEC_TYPE_DST_COL As Long = 2   ' B - наименование
+Private Const SPEC_CNT_DST_COL As Long = 3    ' C - кол-во позиций
+Private Const SPEC_SCR_DST_COL As Long = 4    ' D - экран (Э)
+Private Const SPEC_LEN_DST_COL As Long = 5    ' E - суммарная длина, м
+
+' листы спецификации: A4 книжная, мм
+Private Const SPEC_SHEET_W_MM As Double = 210
+Private Const SPEC_SHEET_H_MM As Double = 297
+' поправка ширины рамки спецификации, мм (0 = по геометрии листа)
+Private Const SPEC_FRAME_ADJUST_MM As Double = 0
 
 ' толщина линий, пт (основная / тонкая)
 Private Const W_MAIN As Double = 2#
@@ -438,7 +454,7 @@ Public Sub PrintWithFrameAnn()
     DrawFrameRect ws, 0, frameW, frameH
     ' штамп формы 6 у нижней линии рамки
     sTopa = 0 + frameH - MM(40)
-    DrawStampForm5 ws, MM(20), sTopa, CountPageAll
+    DrawStampForm5 ws, MM(20), sTopa, CountPageAll + PagesSpec
     DrawStampDopS ws, MM(8), frameH - MM(85)
     DrawStampDopB ws, MM(5), frameH - MM(85 + 65)
 
@@ -504,24 +520,27 @@ Public Sub BuildSpecification()
     Set src = Worksheets(SPEC_SRC_SHEET)
     Set dst = Worksheets(SPEC_DST_SHEET)
 
-    ' ===== 1. Кабели: сумма длин по типам (E - тип, Q - длина) ======
-    Dim cab As Object
-    Set cab = CreateObject("Scripting.Dictionary")
-    cab.CompareMode = vbTextCompare
+    ' ===== 1. Кабели: длина и число позиций по типам ================
+    Dim cabLen As Object, cabCnt As Object
+    Set cabLen = CreateObject("Scripting.Dictionary")
+    Set cabCnt = CreateObject("Scripting.Dictionary")
+    cabLen.CompareMode = vbTextCompare
+    cabCnt.CompareMode = vbTextCompare
     Dim lastRow As Long, r As Long, t As String, v As Variant
     lastRow = src.Cells(src.Rows.Count, SPEC_TYPE_SRC_COL).End(xlUp).Row
     For r = 1 To lastRow
         t = Trim$(CStr(src.Cells(r, SPEC_TYPE_SRC_COL).Value))
         v = src.Cells(r, SPEC_LEN_SRC_COL).Value
         If Len(t) > 0 And IsNumeric(v) Then
-            cab(t) = cab(t) + CDbl(v)
+            cabLen(t) = cabLen(t) + CDbl(v)
+            cabCnt(t) = cabCnt(t) + 1
         End If
     Next r
 
     ' ===== 2. Трубы и металлорукава: разбор строки в столбце P ======
     ' Формат: Тр|МР + диаметр + тире + длина(+"м"), напр. "Тр25-3м".
-    ' "Dn" перед диаметром необязательно. В одной ячейке может быть
-    ' несколько записей через запятую.
+    ' "Dn" необязательно; несколько записей через запятую; прочие
+    ' обозначения (лоток Лк и т.п.) игнорируются.
     Dim rx As Object
     Set rx = CreateObject("VBScript.RegExp")
     rx.Global = True
@@ -529,9 +548,11 @@ Public Sub BuildSpecification()
     rx.Pattern = "(Тр|МР)\s*\.?\s*(?:[Dd][Nn])?\s*" & _
         "(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)"
 
-    Dim pipe As Object
-    Set pipe = CreateObject("Scripting.Dictionary")
-    pipe.CompareMode = vbTextCompare
+    Dim pLen As Object, pCnt As Object
+    Set pLen = CreateObject("Scripting.Dictionary")
+    Set pCnt = CreateObject("Scripting.Dictionary")
+    pLen.CompareMode = vbTextCompare
+    pCnt.CompareMode = vbTextCompare
     Dim lastP As Long, cellTxt As String, mt As Object
     Dim kind As String, dia As String, pkey As String, lng As Double
     lastP = src.Cells(src.Rows.Count, SPEC_PIPE_SRC_COL).End(xlUp).Row
@@ -543,12 +564,13 @@ Public Sub BuildSpecification()
                 dia = mt.SubMatches(1)
                 lng = Val(Replace(mt.SubMatches(2), ",", "."))
                 pkey = kind & "|" & dia
-                pipe(pkey) = pipe(pkey) + lng
+                pLen(pkey) = pLen(pkey) + lng
+                pCnt(pkey) = pCnt(pkey) + 1
             Next mt
         End If
     Next r
 
-    If cab.Count = 0 And pipe.Count = 0 Then
+    If cabLen.Count = 0 And pLen.Count = 0 Then
         MsgBox "На листе '" & SPEC_SRC_SHEET & "' не найдено " & _
             "данных для спецификации.", vbExclamation
         Exit Sub
@@ -556,58 +578,82 @@ Public Sub BuildSpecification()
 
     Application.ScreenUpdating = False
 
-    ' --- очистка прежнего вывода и разрывов страниц -----------------
-    Dim lastDst As Long
-    lastDst = dst.Cells(dst.Rows.Count, SPEC_TYPE_DST_COL).End(xlUp).Row
-    If lastDst < SPEC_START_ROW Then lastDst = SPEC_START_ROW
-    dst.Range(dst.Cells(SPEC_START_ROW, SPEC_TYPE_DST_COL), _
-        dst.Cells(lastDst, SPEC_LEN_DST_COL)).ClearContents
+    ' --- полная очистка листа спецификации (формируется заново) -----
+    Dim lu As Long
+    lu = dst.Cells.SpecialCells(xlCellTypeLastCell).Row
+    DeleteFrameShapes dst
     dst.ResetAllPageBreaks
+    If lu >= 1 Then dst.Rows("1:" & (lu + 5)).Delete
 
-    ' --- таблица кабелей --------------------------------------------
+    ' ширины: A - гутер (левое поле), B..E - колонки таблицы
+    SetColMM dst, 1, 20
+    SetColMM dst, SPEC_TYPE_DST_COL, 95
+    SetColMM dst, SPEC_CNT_DST_COL, 22
+    SetColMM dst, SPEC_SCR_DST_COL, 22
+    SetColMM dst, SPEC_LEN_DST_COL, 30
+
+    ' --- таблица кабелей (B: тип, C: кол-во, D: экран, E: длина) -----
     Dim i As Long, cabLast As Long
     cabLast = SPEC_START_ROW - 1
-    If cab.Count > 0 Then
-        Dim ck() As String, cl() As String, cv() As Double
-        SortDictKeysText cab, ck
-        ReDim cl(0 To UBound(ck)): ReDim cv(0 To UBound(ck))
+    If cabLen.Count > 0 Then
+        Dim ck() As String
+        SortDictKeysText cabLen, ck
+        Dim nm() As String, cn() As Long, sc() As String, ln() As Double
+        ReDim nm(0 To UBound(ck)): ReDim cn(0 To UBound(ck))
+        ReDim sc(0 To UBound(ck)): ReDim ln(0 To UBound(ck))
         For i = 0 To UBound(ck)
-            cl(i) = ck(i)
-            cv(i) = cab(ck(i))
+            nm(i) = ck(i)
+            cn(i) = cabCnt(ck(i))
+            sc(i) = IIf(InStr(1, ck(i), "Э", vbTextCompare) > 0, "Э", "—")
+            ln(i) = cabLen(ck(i))
         Next i
-        cabLast = WriteTwoColTable(dst, SPEC_START_ROW, _
-            "Тип кабеля", "Суммарная длина, м", cl, cv, "Итого")
+        cabLast = WriteSpecTable(dst, SPEC_START_ROW, "Тип кабеля", _
+            nm, cn, sc, ln, True)
     End If
 
-    ' --- таблица труб и металлорукавов (с новой страницы) -----------
-    Dim pipeLast As Long, pipeStart As Long, pipeCnt As Long
+    ' --- таблица труб и металлорукавов ------------------------------
+    Dim pipeLast As Long, pipeStart As Long
     pipeLast = cabLast
-    If pipe.Count > 0 Then
+    pipeStart = 0
+    If pLen.Count > 0 Then
         pipeStart = cabLast + 2
-        dst.Rows(pipeStart).PageBreak = xlPageBreakManual
-        Dim pk() As String, pl() As String, pv() As Double
-        SortPipeKeys pipe, pk
-        ReDim pl(0 To UBound(pk)): ReDim pv(0 To UBound(pk))
+        Dim pk() As String
+        SortPipeKeys pLen, pk
+        Dim pnm() As String, pcn() As Long
+        Dim psc() As String, pln() As Double
+        ReDim pnm(0 To UBound(pk)): ReDim pcn(0 To UBound(pk))
+        ReDim psc(0 To UBound(pk)): ReDim pln(0 To UBound(pk))
         For i = 0 To UBound(pk)
-            pl(i) = PipeLabel(pk(i))
-            pv(i) = pipe(pk(i))
+            pnm(i) = PipeLabel(pk(i))
+            pcn(i) = pCnt(pk(i))
+            psc(i) = ""
+            pln(i) = pLen(pk(i))
         Next i
-        pipeLast = WriteTwoColTable(dst, pipeStart, _
-            "Труба / металлорукав, Dn", "Суммарная длина, м", _
-            pl, pv, "Итого")
-        pipeCnt = pipe.Count
+        pipeLast = WriteSpecTable(dst, pipeStart, _
+            "Труба / металлорукав", pnm, pcn, psc, pln, False)
     End If
+
+    ' --- рамки, штампы, разбивка на листы A4 книжной ----------------
+    Dim specBase As Long
+    If CountPageAll > 0 Then
+        specBase = CountPageAll
+    Else
+        specBase = PAGE_OFFSET
+    End If
+    PagesSpec = FrameSpecSheet(dst, specBase, pipeStart)
 
     Application.ScreenUpdating = True
     dst.Activate
     MsgBox "Спецификация обновлена." & vbCrLf & _
-        "Типов кабеля: " & cab.Count & vbCrLf & _
-        "Позиций труб/металлорукавов: " & pipeCnt, _
+        "Типов кабеля: " & cabLen.Count & vbCrLf & _
+        "Позиций труб/металлорукавов: " & pLen.Count & vbCrLf & _
+        "Листов спецификации: " & PagesSpec, _
         vbInformation, "Спецификация"
     Exit Sub
 
 errH:
     Application.ScreenUpdating = True
+    Application.PrintCommunication = True
     MsgBox "Ошибка: " & Err.Description, vbExclamation, "Спецификация"
 End Sub
 
@@ -670,25 +716,174 @@ Private Function PipeLabel(ByVal key As String) As String
     PipeLabel = nm & " Dn" & dia
 End Function
 
+
 '---------------------------------------------------------------------
-' Запись таблицы: заголовок, строки, итог; возвращает строку итога
-Private Function WriteTwoColTable(dst As Worksheet, _
-    ByVal startRow As Long, ByVal h1 As String, ByVal h2 As String, _
-    labels() As String, vals() As Double, _
-    ByVal totalLabel As String) As Long
-    Dim i As Long, rr As Long, total As Double
-    dst.Cells(startRow, SPEC_TYPE_DST_COL).Value = h1
-    dst.Cells(startRow, SPEC_LEN_DST_COL).Value = h2
+' Запись таблицы спецификации: B - наименование, C - кол-во позиций,
+' D - экран (для кабелей), E - длина. Возвращает строку итога.
+' showScr=False оставляет столбец экрана пустым (трубы).
+Private Function WriteSpecTable(dst As Worksheet, _
+    ByVal startRow As Long, ByVal nameHead As String, _
+    names() As String, cnts() As Long, scrs() As String, _
+    lens() As Double, ByVal showScr As Boolean) As Long
+    Dim i As Long, rr As Long
+    Dim totalCnt As Long, totalLen As Double
+    dst.Cells(startRow, SPEC_TYPE_DST_COL).Value = nameHead
+    dst.Cells(startRow, SPEC_CNT_DST_COL).Value = "Кол-во"
+    If showScr Then dst.Cells(startRow, SPEC_SCR_DST_COL).Value = "Экран"
+    dst.Cells(startRow, SPEC_LEN_DST_COL).Value = "Длина, м"
     rr = startRow + 1
-    For i = LBound(labels) To UBound(labels)
-        dst.Cells(rr, SPEC_TYPE_DST_COL).Value = labels(i)
-        dst.Cells(rr, SPEC_LEN_DST_COL).Value = vals(i)
-        total = total + vals(i)
+    For i = LBound(names) To UBound(names)
+        dst.Cells(rr, SPEC_TYPE_DST_COL).Value = names(i)
+        dst.Cells(rr, SPEC_CNT_DST_COL).Value = cnts(i)
+        If showScr Then dst.Cells(rr, SPEC_SCR_DST_COL).Value = scrs(i)
+        dst.Cells(rr, SPEC_LEN_DST_COL).Value = lens(i)
+        totalCnt = totalCnt + cnts(i)
+        totalLen = totalLen + lens(i)
         rr = rr + 1
     Next i
-    dst.Cells(rr, SPEC_TYPE_DST_COL).Value = totalLabel
-    dst.Cells(rr, SPEC_LEN_DST_COL).Value = total
-    WriteTwoColTable = rr
+    dst.Cells(rr, SPEC_TYPE_DST_COL).Value = "Итого"
+    dst.Cells(rr, SPEC_CNT_DST_COL).Value = totalCnt
+    dst.Cells(rr, SPEC_LEN_DST_COL).Value = totalLen
+    WriteSpecTable = rr
+End Function
+
+'---------------------------------------------------------------------
+' Ширина столбца col примерно mmVal миллиметров
+Private Sub SetColMM(ws As Worksheet, ByVal col As Long, _
+    ByVal mmVal As Double)
+    Dim target As Double
+    target = MM(mmVal)
+    ws.Columns(col).ColumnWidth = 1
+    Do While ws.Columns(col).Width < target
+        ws.Columns(col).ColumnWidth = ws.Columns(col).ColumnWidth + 0.5
+        If ws.Columns(col).ColumnWidth > 255 Then Exit Do
+    Loop
+End Sub
+
+'---------------------------------------------------------------------
+' Рамка + форма 6 + левый штамп на листе спецификации (A4 книжная).
+' forcedRow - строка начала таблицы труб (принудительный разрыв
+' страницы), 0 - нет. pageBase - число листов до спецификации.
+' Возвращает число листов спецификации.
+Private Function FrameSpecSheet(ws As Worksheet, _
+    ByVal pageBase As Long, ByVal forcedRow As Long) As Long
+    Dim cW As Double, cH As Double, frameW As Double, frameH As Double
+    cW = MM(SPEC_SHEET_W_MM - FLD_LEFT_MM - FLD_OTHER_MM)
+    cH = MM(SPEC_SHEET_H_MM)
+    frameW = cW - MM(SPEC_FRAME_ADJUST_MM)
+    frameH = cH - MM(FRAME_BOTTOM_MM)
+
+    DeleteFrameShapes ws
+    ws.ResetAllPageBreaks
+
+    Dim lastRow As Long
+    lastRow = ws.Cells.SpecialCells(xlCellTypeLastCell).Row
+
+    ' проход 1: границы страниц (с учётом принудительного разрыва)
+    Dim stampReserve As Double
+    stampReserve = MM(STAMP_H + STAMP_GAP)
+    Dim brks As Collection
+    Set brks = New Collection
+    Dim r As Long, acc As Double, limit As Double, rowH As Double
+    limit = cH - stampReserve
+    acc = 0: r = 1
+    Do While r <= lastRow
+        rowH = ws.Rows(r).Height
+        If ((r = forcedRow) Or (acc + rowH > limit + 0.3)) _
+            And acc > 0 Then
+            brks.Add Array(r, cH - acc)
+            acc = 0
+        Else
+            acc = acc + rowH
+            r = r + 1
+        End If
+    Loop
+
+    Dim i As Long, itm As Variant
+    For i = brks.Count To 1 Step -1
+        itm = brks(i)
+        InsertFiller ws, CLng(itm(0)) - 1, CDbl(itm(1))
+    Next i
+    lastRow = ws.Cells.SpecialCells(xlCellTypeLastCell).Row
+
+    ' проход 2: разрывы, рамки, штампы
+    Dim pages As Collection
+    Set pages = New Collection
+    Dim pTop As Double
+    acc = 0: pTop = 0
+    For r = 1 To lastRow
+        rowH = ws.Rows(r).Height
+        If acc + rowH > cH + 0.3 And acc > 0 Then
+            pages.Add pTop
+            ws.Rows(r).PageBreak = xlPageBreakManual
+            pTop = ws.Rows(r).Top
+            acc = 0
+        End If
+        acc = acc + rowH
+    Next r
+    pages.Add pTop
+
+    Dim k As Long, thisH As Double, sTopa As Double
+    Dim sTopb As Double, thisHDop As Double, cnum As Long
+    For k = 1 To pages.Count
+        pTop = pages(k)
+        If k = pages.Count Then
+            thisH = frameH - 2
+            thisHDop = thisH
+        Else
+            thisH = frameH
+            thisHDop = frameH - 2.5
+        End If
+        DrawFrameRect ws, pTop, frameW, thisH
+        sTopa = pTop + thisH - MM(STAMP_H)
+        sTopb = pTop + thisHDop - MM(85)
+        cnum = pageBase + k
+        DrawStampForm6 ws, frameW - MM(STAMP_W - 20), sTopa, cnum
+        DrawStampDopS ws, MM(8), sTopb
+    Next k
+
+    ' область печати: до низа последнего листа и до правого края рамки
+    Dim lastTop As Double, printLastRow As Long
+    lastTop = pages(pages.Count)
+    printLastRow = lastRow
+    Do While printLastRow < 1000000
+        If ws.Rows(printLastRow + 1).Top _
+            >= lastTop + frameH + MM(3) Then Exit Do
+        printLastRow = printLastRow + 1
+    Loop
+    Dim pcol As Long, accCol As Double
+    accCol = 0
+    For i = 1 To SPEC_LEN_DST_COL
+        accCol = accCol + ws.Columns(i).Width
+    Next i
+    pcol = SPEC_LEN_DST_COL
+    Do While accCol < MM(20) + frameW + MM(3) And pcol < 16384
+        pcol = pcol + 1
+        accCol = accCol + ws.Columns(pcol).Width
+    Loop
+
+    Application.PrintCommunication = False
+    With ws.PageSetup
+        .PaperSize = xlPaperA4
+        .Orientation = xlPortrait
+        .LeftMargin = 0
+        .RightMargin = 0
+        .TopMargin = MM(FLD_OTHER_MM)
+        .BottomMargin = 0
+        .HeaderMargin = 0: .FooterMargin = 0
+        .LeftHeader = "": .CenterHeader = "": .RightHeader = ""
+        .LeftFooter = ""
+        .CenterFooter = "&""Times New Roman""&10&F"
+        .RightFooter = "&""Times New Roman""&10Формат А4" & Space(20)
+        .CenterHorizontally = False
+        .CenterVertically = False
+        .Zoom = 100
+        .PrintArea = ws.Range(ws.Cells(1, 1), _
+            ws.Cells(printLastRow, pcol)).Address
+    End With
+    Application.PrintCommunication = True
+
+    FrameSpecSheet = pages.Count
 End Function
 
 Private Sub DeleteFrameShapes(ws As Worksheet)
