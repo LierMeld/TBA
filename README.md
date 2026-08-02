@@ -108,6 +108,8 @@ Windows-1251). Поэтому файл `GostFrame.bas` сохранён в Windo
 - В таблице кабелей столбцы: **Тип кабеля | Кол-во позиций | Экран |
   Длина, м**. «Кол-во позиций» — сколько строк данного типа; «Экран»
   показывает наличие экранирования по букве **Э** в названии типа.
+- В таблице труб и металлорукавов только **наименование и суммарная
+  длина** (без количества и экрана).
 - Лист «Спецификация» формируется заново при каждом запуске (прежнее
   содержимое очищается) и оформляется рамками формата **A4 книжная**
   с основной надписью формы 6 и левым штампом на каждом листе.
@@ -548,11 +550,9 @@ Public Sub BuildSpecification()
     rx.Pattern = "(Тр|МР)\s*\.?\s*(?:[Dd][Nn])?\s*" & _
         "(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)"
 
-    Dim pLen As Object, pCnt As Object
+    Dim pLen As Object
     Set pLen = CreateObject("Scripting.Dictionary")
-    Set pCnt = CreateObject("Scripting.Dictionary")
     pLen.CompareMode = vbTextCompare
-    pCnt.CompareMode = vbTextCompare
     Dim lastP As Long, cellTxt As String, mt As Object
     Dim kind As String, dia As String, pkey As String, lng As Double
     lastP = src.Cells(src.Rows.Count, SPEC_PIPE_SRC_COL).End(xlUp).Row
@@ -565,7 +565,6 @@ Public Sub BuildSpecification()
                 lng = Val(Replace(mt.SubMatches(2), ",", "."))
                 pkey = kind & "|" & dia
                 pLen(pkey) = pLen(pkey) + lng
-                pCnt(pkey) = pCnt(pkey) + 1
             Next mt
         End If
     Next r
@@ -608,7 +607,7 @@ Public Sub BuildSpecification()
             ln(i) = cabLen(ck(i))
         Next i
         cabLast = WriteSpecTable(dst, SPEC_START_ROW, "Тип кабеля", _
-            nm, cn, sc, ln, True)
+            nm, cn, sc, ln, True, True)
     End If
 
     ' --- таблица труб и металлорукавов ------------------------------
@@ -625,12 +624,12 @@ Public Sub BuildSpecification()
         ReDim psc(0 To UBound(pk)): ReDim pln(0 To UBound(pk))
         For i = 0 To UBound(pk)
             pnm(i) = PipeLabel(pk(i))
-            pcn(i) = pCnt(pk(i))
             psc(i) = ""
             pln(i) = pLen(pk(i))
         Next i
         pipeLast = WriteSpecTable(dst, pipeStart, _
-            "Труба / металлорукав", pnm, pcn, psc, pln, False)
+            "Труба / металлорукав", pnm, pcn, psc, pln, _
+            False, False)
     End If
 
     ' --- рамки, штампы, разбивка на листы A4 книжной ----------------
@@ -724,26 +723,37 @@ End Function
 Private Function WriteSpecTable(dst As Worksheet, _
     ByVal startRow As Long, ByVal nameHead As String, _
     names() As String, cnts() As Long, scrs() As String, _
-    lens() As Double, ByVal showScr As Boolean) As Long
-    Dim i As Long, rr As Long
+    lens() As Double, ByVal showScr As Boolean, _
+    ByVal showCnt As Boolean) As Long
+    Dim i As Long, rr As Long, lenCol As Long
     Dim totalCnt As Long, totalLen As Double
+    ' без столбца количества длина идёт сразу после наименования
+    If showCnt Then
+        lenCol = SPEC_LEN_DST_COL
+    Else
+        lenCol = SPEC_CNT_DST_COL
+    End If
     dst.Cells(startRow, SPEC_TYPE_DST_COL).Value = nameHead
-    dst.Cells(startRow, SPEC_CNT_DST_COL).Value = "Кол-во"
+    If showCnt Then
+        dst.Cells(startRow, SPEC_CNT_DST_COL).Value = "Кол-во"
+    End If
     If showScr Then dst.Cells(startRow, SPEC_SCR_DST_COL).Value = "Экран"
-    dst.Cells(startRow, SPEC_LEN_DST_COL).Value = "Длина, м"
+    dst.Cells(startRow, lenCol).Value = "Длина, м"
     rr = startRow + 1
     For i = LBound(names) To UBound(names)
         dst.Cells(rr, SPEC_TYPE_DST_COL).Value = names(i)
-        dst.Cells(rr, SPEC_CNT_DST_COL).Value = cnts(i)
+        If showCnt Then
+            dst.Cells(rr, SPEC_CNT_DST_COL).Value = cnts(i)
+            totalCnt = totalCnt + cnts(i)
+        End If
         If showScr Then dst.Cells(rr, SPEC_SCR_DST_COL).Value = scrs(i)
-        dst.Cells(rr, SPEC_LEN_DST_COL).Value = lens(i)
-        totalCnt = totalCnt + cnts(i)
+        dst.Cells(rr, lenCol).Value = lens(i)
         totalLen = totalLen + lens(i)
         rr = rr + 1
     Next i
     dst.Cells(rr, SPEC_TYPE_DST_COL).Value = "Итого"
-    dst.Cells(rr, SPEC_CNT_DST_COL).Value = totalCnt
-    dst.Cells(rr, SPEC_LEN_DST_COL).Value = totalLen
+    If showCnt Then dst.Cells(rr, SPEC_CNT_DST_COL).Value = totalCnt
+    dst.Cells(rr, lenCol).Value = totalLen
     WriteSpecTable = rr
 End Function
 
