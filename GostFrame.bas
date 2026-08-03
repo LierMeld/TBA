@@ -649,11 +649,14 @@ Private Sub FormatSpecHeader(dst As Worksheet, ByVal hdr As Long)
 End Sub
 
 '---------------------------------------------------------------------
-' Объединение ячеек наименования (B..E) в таблице труб
-Private Sub MergeNameCells(dst As Worksheet, ByVal rw As Long)
+' Объединение ячеек наименования (B..E) в строках r1..r2.
+' Across:=True объединяет КАЖДУЮ строку отдельно - строки не
+' сливаются в одну ячейку.
+Private Sub MergeNameBlock(dst As Worksheet, ByVal r1 As Long, _
+    ByVal r2 As Long)
     Application.DisplayAlerts = False
-    dst.Range(dst.Cells(rw, SPEC_VOLT_DST_COL), _
-        dst.Cells(rw, SPEC_LEN_DST_COL - 1)).Merge
+    dst.Range(dst.Cells(r1, SPEC_VOLT_DST_COL), _
+        dst.Cells(r2, SPEC_LEN_DST_COL - 1)).Merge Across:=True
     Application.DisplayAlerts = True
 End Sub
 
@@ -731,17 +734,17 @@ Private Sub WritePipeTable(dst As Worksheet, ByVal startRow As Long, _
     hdr = startRow + 1
     dst.Cells(hdr, SPEC_VOLT_DST_COL).Value = "Наименование"
     dst.Cells(hdr, SPEC_LEN_DST_COL).Value = "Суммарная длина, м"
-    MergeNameCells dst, hdr
 
     rr = hdr + 1
     For i = LBound(names) To UBound(names)
         dst.Cells(rr, SPEC_VOLT_DST_COL).Value = names(i)
         dst.Cells(rr, SPEC_LEN_DST_COL).Value = lens(i)
-        MergeNameCells dst, rr
         rr = rr + 1
     Next i
     lastData = rr - 1
 
+    ' объединение наименования - после записи всех значений
+    MergeNameBlock dst, hdr, lastData
     FormatSpecBlock dst, hdr, lastData
     FormatSpecHeader dst, hdr
     dst.Range(dst.Cells(hdr + 1, SPEC_VOLT_DST_COL), _
@@ -938,7 +941,11 @@ Private Function InsertFiller(ws As Worksheet, _
         h = remain
         ' предел высоты строки Excel
         If h > 400 Then h = 400
-        ws.Rows(afterRow + 1).Insert Shift:=xlDown
+        ' формат берём от строки НИЖЕ: иначе вставленная строка
+        ' наследует объединение ячеек сверху и "склеивает" их
+        ws.Rows(afterRow + 1).Insert Shift:=xlDown, _
+            CopyOrigin:=xlFormatFromRightOrBelow
+        ws.Rows(afterRow + 1).UnMerge
         ws.Rows(afterRow + 1).Clear
         ws.Rows(afterRow + 1).RowHeight = h
         remain = remain - h
