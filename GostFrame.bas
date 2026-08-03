@@ -68,12 +68,26 @@ Private Const SPEC_DST_SHEET As String = "Спецификация"
 Private Const SPEC_TYPE_SRC_COL As Long = 5   ' E - тип кабеля
 Private Const SPEC_LEN_SRC_COL As Long = 17   ' Q - длина, м
 Private Const SPEC_PIPE_SRC_COL As Long = 16  ' P - строка труб/МР
-Private Const SPEC_START_ROW As Long = 2      ' первая строка вывода
+Private Const SPEC_VOLT_SRC_COL As Long = 15  ' O - напряжение
+' таблицы начинаются с 3-й строки от границы листа
+Private Const SPEC_START_ROW As Long = 3
 ' A - левое поле (гутер), таблица с B
-Private Const SPEC_TYPE_DST_COL As Long = 2   ' B - наименование
-Private Const SPEC_CNT_DST_COL As Long = 3    ' C - кол-во позиций
-Private Const SPEC_SCR_DST_COL As Long = 4    ' D - экран (Э)
-Private Const SPEC_LEN_DST_COL As Long = 5    ' E - суммарная длина, м
+Private Const SPEC_VOLT_DST_COL As Long = 2   ' B - напряжение
+Private Const SPEC_TYPE_DST_COL As Long = 3   ' C - тип кабеля
+Private Const SPEC_CNT_DST_COL As Long = 4    ' D - кол-во позиций
+Private Const SPEC_SCR_DST_COL As Long = 5    ' E - экран (Э)
+Private Const SPEC_LEN_DST_COL As Long = 6    ' F - суммарная длина, м
+
+' заголовки таблиц спецификации - редактируются здесь
+Private Const SPEC_CAB_TITLE As String = "Спецификация кабелей"
+Private Const SPEC_PIPE_TITLE As String = _
+    "Спецификация труб и металлорукавов"
+
+' шрифт таблиц спецификации
+Private Const SPEC_FONT_NAME As String = "Times New Roman"
+Private Const SPEC_FONT_SIZE As Double = 10
+Private Const SPEC_TITLE_SIZE As Double = 12
+Private Const SPEC_HDR_HEIGHT As Double = 30  ' высота шапки, пт
 
 ' листы спецификации: A4 книжная, мм
 Private Const SPEC_SHEET_W_MM As Double = 210
@@ -101,6 +115,14 @@ End Function
 '---------------------------------------------------------------------
 Public Sub PrintWithFrame()
     On Error GoTo errH
+    If PagesSpec = 0 Then
+        If MsgBox("Листы спецификации ещё не посчитаны " & _
+            "(BuildSpecification не запускался)." & vbCrLf & _
+            "Продолжить без их учёта в нумерации?", _
+            vbYesNo + vbExclamation, "Нумерация листов") <> vbYes Then
+            Exit Sub
+        End If
+    End If
     Dim src As Worksheet
     Set src = Worksheets("Таблица кабелей")
 
@@ -207,11 +229,13 @@ Public Sub PrintWithFrame()
         ' штамп формы 6 у нижней линии рамки
         sTopa = pTop + thisH - MM(STAMP_H)
         sTopb = pTop + thisHDop - MM(85)
-        CntPgs = k + PAGE_OFFSET ' номер текущего листа
+        ' листы кабелей идут после листов спецификации
+        CntPgs = k + PAGE_OFFSET + PagesSpec
         DrawStampForm6 ws, frameW - MM(STAMP_W - 20), sTopa, CntPgs
         DrawStampDopS ws, MM(8), sTopb
     Next k
-    CountPageAll = pages.Count + PAGE_OFFSET ' общее количество листов
+    ' общее число листов документа
+    CountPageAll = PAGE_OFFSET + PagesSpec + pages.Count
     ' --- область печати ---------------------------------------------
     ' Область печати должна полностью накрывать рамку и штамп, иначе
     ' Excel обрежет их нижнюю и правую границы. Поэтому строки тянем
@@ -304,7 +328,7 @@ Public Sub PrintWithFrameAnn()
     DrawFrameRect ws, 0, frameW, frameH
     ' штамп формы 6 у нижней линии рамки
     sTopa = 0 + frameH - MM(40)
-    DrawStampForm5 ws, MM(20), sTopa, CountPageAll + PagesSpec
+    DrawStampForm5 ws, MM(20), sTopa, CountPageAll
     DrawStampDopS ws, MM(8), frameH - MM(85)
     DrawStampDopB ws, MM(5), frameH - MM(85 + 65)
 
@@ -370,13 +394,16 @@ Public Sub BuildSpecification()
     Set src = Worksheets(SPEC_SRC_SHEET)
     Set dst = Worksheets(SPEC_DST_SHEET)
 
-    ' ===== 1. Кабели: длина и число позиций по типам ================
-    Dim cabLen As Object, cabCnt As Object
+    ' ===== 1. Кабели: длина, число позиций, напряжение по типам =====
+    Dim cabLen As Object, cabCnt As Object, cabVolt As Object
     Set cabLen = CreateObject("Scripting.Dictionary")
     Set cabCnt = CreateObject("Scripting.Dictionary")
+    Set cabVolt = CreateObject("Scripting.Dictionary")
     cabLen.CompareMode = vbTextCompare
     cabCnt.CompareMode = vbTextCompare
-    Dim lastRow As Long, r As Long, t As String, v As Variant
+    cabVolt.CompareMode = vbTextCompare
+    Dim lastRow As Long, r As Long, t As String
+    Dim v As Variant, vt As String
     lastRow = src.Cells(src.Rows.Count, SPEC_TYPE_SRC_COL).End(xlUp).Row
     For r = 1 To lastRow
         t = Trim$(CStr(src.Cells(r, SPEC_TYPE_SRC_COL).Value))
@@ -384,6 +411,16 @@ Public Sub BuildSpecification()
         If Len(t) > 0 And IsNumeric(v) Then
             cabLen(t) = cabLen(t) + CDbl(v)
             cabCnt(t) = cabCnt(t) + 1
+            ' напряжение из столбца O; разные значения - через "/"
+            vt = Trim$(CStr(src.Cells(r, SPEC_VOLT_SRC_COL).Value))
+            If Len(vt) > 0 Then
+                If Not cabVolt.Exists(t) Then
+                    cabVolt(t) = vt
+                ElseIf InStr(1, "/" & cabVolt(t) & "/", _
+                    "/" & vt & "/", vbTextCompare) = 0 Then
+                    cabVolt(t) = cabVolt(t) & "/" & vt
+                End If
+            End If
         End If
     Next r
 
@@ -425,69 +462,62 @@ Public Sub BuildSpecification()
 
     Application.ScreenUpdating = False
 
-    ' --- полная очистка листа спецификации (формируется заново) -----
+    ' --- лист спецификации формируется заново ------------------------
     Dim lu As Long
     lu = dst.Cells.SpecialCells(xlCellTypeLastCell).Row
     DeleteFrameShapes dst
     dst.ResetAllPageBreaks
+    dst.Cells.UnMerge
     If lu >= 1 Then dst.Rows("1:" & (lu + 5)).Delete
 
-    ' ширины: A - гутер (левое поле), B..E - колонки таблицы
+    ' ширины: A - гутер (левое поле), B..F - колонки таблицы
     SetColMM dst, 1, 20
-    SetColMM dst, SPEC_TYPE_DST_COL, 95
-    SetColMM dst, SPEC_CNT_DST_COL, 22
-    SetColMM dst, SPEC_SCR_DST_COL, 22
-    SetColMM dst, SPEC_LEN_DST_COL, 30
+    SetColMM dst, SPEC_VOLT_DST_COL, 25
+    SetColMM dst, SPEC_TYPE_DST_COL, 80
+    SetColMM dst, SPEC_CNT_DST_COL, 20
+    SetColMM dst, SPEC_SCR_DST_COL, 20
+    SetColMM dst, SPEC_LEN_DST_COL, 25
 
-    ' --- таблица кабелей (B: тип, C: кол-во, D: экран, E: длина) -----
+    ' --- таблица кабелей ---------------------------------------------
     Dim i As Long, cabLast As Long
     cabLast = SPEC_START_ROW - 1
     If cabLen.Count > 0 Then
         Dim ck() As String
         SortDictKeysText cabLen, ck
-        Dim nm() As String, cn() As Long, sc() As String, ln() As Double
-        ReDim nm(0 To UBound(ck)): ReDim cn(0 To UBound(ck))
-        ReDim sc(0 To UBound(ck)): ReDim ln(0 To UBound(ck))
+        Dim vo() As String, nm() As String, cn() As Long
+        Dim sc() As String, ln() As Double
+        ReDim vo(0 To UBound(ck)): ReDim nm(0 To UBound(ck))
+        ReDim cn(0 To UBound(ck)): ReDim sc(0 To UBound(ck))
+        ReDim ln(0 To UBound(ck))
         For i = 0 To UBound(ck)
             nm(i) = ck(i)
+            vo(i) = CStr(cabVolt(ck(i)))
             cn(i) = cabCnt(ck(i))
-            sc(i) = IIf(InStr(1, ck(i), "Э", vbTextCompare) > 0, "Э", "—")
+            sc(i) = IIf(IsShielded(ck(i)), "Э", "—")
             ln(i) = cabLen(ck(i))
         Next i
-        cabLast = WriteSpecTable(dst, SPEC_START_ROW, "Тип кабеля", _
-            nm, cn, sc, ln, True, True)
+        cabLast = WriteCableTable(dst, SPEC_START_ROW, vo, nm, cn, sc, ln)
     End If
 
-    ' --- таблица труб и металлорукавов ------------------------------
-    Dim pipeLast As Long, pipeStart As Long
-    pipeLast = cabLast
-    pipeStart = 0
+    ' --- таблица труб и металлорукавов (новый лист, 3-я строка) ------
+    Dim pipeBreak As Long, pipeStart As Long
+    pipeBreak = 0
     If pLen.Count > 0 Then
-        pipeStart = cabLast + 2
+        pipeBreak = cabLast + 2
+        pipeStart = pipeBreak + 2
         Dim pk() As String
         SortPipeKeys pLen, pk
-        Dim pnm() As String, pcn() As Long
-        Dim psc() As String, pln() As Double
-        ReDim pnm(0 To UBound(pk)): ReDim pcn(0 To UBound(pk))
-        ReDim psc(0 To UBound(pk)): ReDim pln(0 To UBound(pk))
+        Dim pnm() As String, pln() As Double
+        ReDim pnm(0 To UBound(pk)): ReDim pln(0 To UBound(pk))
         For i = 0 To UBound(pk)
             pnm(i) = PipeLabel(pk(i))
-            psc(i) = ""
             pln(i) = pLen(pk(i))
         Next i
-        pipeLast = WriteSpecTable(dst, pipeStart, _
-            "Труба / металлорукав", pnm, pcn, psc, pln, _
-            False, False)
+        WritePipeTable dst, pipeStart, pnm, pln
     End If
 
-    ' --- рамки, штампы, разбивка на листы A4 книжной ----------------
-    Dim specBase As Long
-    If CountPageAll > 0 Then
-        specBase = CountPageAll
-    Else
-        specBase = PAGE_OFFSET
-    End If
-    PagesSpec = FrameSpecSheet(dst, specBase, pipeStart)
+    ' --- рамки, штампы, разбивка (нумерация начинается отсюда) -------
+    PagesSpec = FrameSpecSheet(dst, PAGE_OFFSET, pipeBreak)
 
     Application.ScreenUpdating = True
     dst.Activate
@@ -564,46 +594,160 @@ Private Function PipeLabel(ByVal key As String) As String
 End Function
 
 
+
 '---------------------------------------------------------------------
-' Запись таблицы спецификации: B - наименование, C - кол-во позиций,
-' D - экран (для кабелей), E - длина. Возвращает строку итога.
-' showScr=False оставляет столбец экрана пустым (трубы).
-Private Function WriteSpecTable(dst As Worksheet, _
-    ByVal startRow As Long, ByVal nameHead As String, _
-    names() As String, cnts() As Long, scrs() As String, _
-    lens() As Double, ByVal showScr As Boolean, _
-    ByVal showCnt As Boolean) As Long
-    Dim i As Long, rr As Long, lenCol As Long
+' Есть ли экран: буква "Э" в названии типа кабеля
+Private Function IsShielded(ByVal nm As String) As Boolean
+    IsShielded = (InStr(1, nm, "Э", vbTextCompare) > 0)
+End Function
+
+'---------------------------------------------------------------------
+' Заголовок таблицы (объединён по ширине таблицы)
+Private Sub WriteSpecTitle(dst As Worksheet, ByVal rw As Long, _
+    ByVal txt As String)
+    dst.Cells(rw, SPEC_VOLT_DST_COL).Value = txt
+    Application.DisplayAlerts = False
+    dst.Range(dst.Cells(rw, SPEC_VOLT_DST_COL), _
+        dst.Cells(rw, SPEC_LEN_DST_COL)).Merge
+    Application.DisplayAlerts = True
+    With dst.Cells(rw, SPEC_VOLT_DST_COL)
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+        .Font.Name = SPEC_FONT_NAME
+        .Font.Size = SPEC_TITLE_SIZE
+        .Font.Bold = True
+    End With
+End Sub
+
+'---------------------------------------------------------------------
+' Границы, шрифт и выравнивание по центру для блока таблицы
+Private Sub FormatSpecBlock(dst As Worksheet, ByVal r1 As Long, _
+    ByVal r2 As Long)
+    With dst.Range(dst.Cells(r1, SPEC_VOLT_DST_COL), _
+        dst.Cells(r2, SPEC_LEN_DST_COL))
+        .Font.Name = SPEC_FONT_NAME
+        .Font.Size = SPEC_FONT_SIZE
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+        With .Borders
+            .LineStyle = xlContinuous
+            .Weight = xlThin
+            .Color = vbBlack
+        End With
+    End With
+End Sub
+
+'---------------------------------------------------------------------
+' Шапка таблицы: перенос строк, полужирный, увеличенная высота
+Private Sub FormatSpecHeader(dst As Worksheet, ByVal hdr As Long)
+    With dst.Range(dst.Cells(hdr, SPEC_VOLT_DST_COL), _
+        dst.Cells(hdr, SPEC_LEN_DST_COL))
+        .WrapText = True
+        .Font.Bold = True
+    End With
+    dst.Rows(hdr).RowHeight = SPEC_HDR_HEIGHT
+End Sub
+
+'---------------------------------------------------------------------
+' Объединение ячеек наименования (B..E) в таблице труб
+Private Sub MergeNameCells(dst As Worksheet, ByVal rw As Long)
+    Application.DisplayAlerts = False
+    dst.Range(dst.Cells(rw, SPEC_VOLT_DST_COL), _
+        dst.Cells(rw, SPEC_LEN_DST_COL - 1)).Merge
+    Application.DisplayAlerts = True
+End Sub
+
+'---------------------------------------------------------------------
+' Таблица кабелей: напряжение, тип, кол-во, экран, длина.
+' После таблицы - пустая строка, итог и сумма экранированных.
+' Возвращает последнюю занятую строку.
+Private Function WriteCableTable(dst As Worksheet, _
+    ByVal startRow As Long, volts() As String, names() As String, _
+    cnts() As Long, scrs() As String, lens() As Double) As Long
+    Dim i As Long, rr As Long, hdr As Long, lastData As Long
     Dim totalCnt As Long, totalLen As Double
-    ' без столбца количества длина идёт сразу после наименования
-    If showCnt Then
-        lenCol = SPEC_LEN_DST_COL
-    Else
-        lenCol = SPEC_CNT_DST_COL
-    End If
-    dst.Cells(startRow, SPEC_TYPE_DST_COL).Value = nameHead
-    If showCnt Then
-        dst.Cells(startRow, SPEC_CNT_DST_COL).Value = "Кол-во"
-    End If
-    If showScr Then dst.Cells(startRow, SPEC_SCR_DST_COL).Value = "Экран"
-    dst.Cells(startRow, lenCol).Value = "Длина, м"
-    rr = startRow + 1
+    Dim scrCnt As Long, scrLen As Double
+
+    WriteSpecTitle dst, startRow, SPEC_CAB_TITLE
+
+    hdr = startRow + 1
+    dst.Cells(hdr, SPEC_VOLT_DST_COL).Value = "Напряжение"
+    dst.Cells(hdr, SPEC_TYPE_DST_COL).Value = "Тип кабеля"
+    dst.Cells(hdr, SPEC_CNT_DST_COL).Value = "Кол-во позиций"
+    dst.Cells(hdr, SPEC_SCR_DST_COL).Value = "Экран"
+    dst.Cells(hdr, SPEC_LEN_DST_COL).Value = "Суммарная длина, м"
+
+    rr = hdr + 1
     For i = LBound(names) To UBound(names)
+        dst.Cells(rr, SPEC_VOLT_DST_COL).Value = volts(i)
         dst.Cells(rr, SPEC_TYPE_DST_COL).Value = names(i)
-        If showCnt Then
-            dst.Cells(rr, SPEC_CNT_DST_COL).Value = cnts(i)
-            totalCnt = totalCnt + cnts(i)
-        End If
-        If showScr Then dst.Cells(rr, SPEC_SCR_DST_COL).Value = scrs(i)
-        dst.Cells(rr, lenCol).Value = lens(i)
+        dst.Cells(rr, SPEC_CNT_DST_COL).Value = cnts(i)
+        dst.Cells(rr, SPEC_SCR_DST_COL).Value = scrs(i)
+        dst.Cells(rr, SPEC_LEN_DST_COL).Value = lens(i)
+        totalCnt = totalCnt + cnts(i)
         totalLen = totalLen + lens(i)
+        If IsShielded(names(i)) Then
+            scrCnt = scrCnt + cnts(i)
+            scrLen = scrLen + lens(i)
+        End If
         rr = rr + 1
     Next i
+    lastData = rr - 1
+
+    ' пустая строка между таблицей и итогом
+    rr = rr + 1
+    Dim totRow As Long
+    totRow = rr
     dst.Cells(rr, SPEC_TYPE_DST_COL).Value = "Итого"
-    If showCnt Then dst.Cells(rr, SPEC_CNT_DST_COL).Value = totalCnt
-    dst.Cells(rr, lenCol).Value = totalLen
-    WriteSpecTable = rr
+    dst.Cells(rr, SPEC_CNT_DST_COL).Value = totalCnt
+    dst.Cells(rr, SPEC_LEN_DST_COL).Value = totalLen
+    rr = rr + 1
+    dst.Cells(rr, SPEC_TYPE_DST_COL).Value = "в том числе экранированных"
+    dst.Cells(rr, SPEC_CNT_DST_COL).Value = scrCnt
+    dst.Cells(rr, SPEC_LEN_DST_COL).Value = scrLen
+
+    ' форматирование: шапка с данными и отдельно блок итогов
+    FormatSpecBlock dst, hdr, lastData
+    FormatSpecHeader dst, hdr
+    FormatSpecBlock dst, totRow, rr
+    dst.Range(dst.Cells(hdr + 1, SPEC_TYPE_DST_COL), _
+        dst.Cells(lastData, SPEC_TYPE_DST_COL)) _
+        .HorizontalAlignment = xlLeft
+    dst.Range(dst.Cells(totRow, SPEC_TYPE_DST_COL), _
+        dst.Cells(rr, SPEC_TYPE_DST_COL)).HorizontalAlignment = xlLeft
+
+    WriteCableTable = rr
 End Function
+
+'---------------------------------------------------------------------
+' Таблица труб и металлорукавов: наименование (объединено B..E) и
+' суммарная длина в том же столбце, что и у кабелей. Итога нет.
+Private Sub WritePipeTable(dst As Worksheet, ByVal startRow As Long, _
+    names() As String, lens() As Double)
+    Dim i As Long, rr As Long, hdr As Long, lastData As Long
+
+    WriteSpecTitle dst, startRow, SPEC_PIPE_TITLE
+
+    hdr = startRow + 1
+    dst.Cells(hdr, SPEC_VOLT_DST_COL).Value = "Наименование"
+    dst.Cells(hdr, SPEC_LEN_DST_COL).Value = "Суммарная длина, м"
+    MergeNameCells dst, hdr
+
+    rr = hdr + 1
+    For i = LBound(names) To UBound(names)
+        dst.Cells(rr, SPEC_VOLT_DST_COL).Value = names(i)
+        dst.Cells(rr, SPEC_LEN_DST_COL).Value = lens(i)
+        MergeNameCells dst, rr
+        rr = rr + 1
+    Next i
+    lastData = rr - 1
+
+    FormatSpecBlock dst, hdr, lastData
+    FormatSpecHeader dst, hdr
+    dst.Range(dst.Cells(hdr + 1, SPEC_VOLT_DST_COL), _
+        dst.Cells(lastData, SPEC_VOLT_DST_COL)) _
+        .HorizontalAlignment = xlLeft
+End Sub
 
 '---------------------------------------------------------------------
 ' Ширина столбца col примерно mmVal миллиметров
